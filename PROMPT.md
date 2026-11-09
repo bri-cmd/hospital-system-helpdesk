@@ -7,6 +7,7 @@
 - Never ask me to paste SQL into Workbench. Use `npm run db:migrate`.
 - Never read, print, or commit `.env`. Keep `.env.example` with placeholders.
 - Keep each stage small. Stop at the end of the stage and wait.
+- Keep the existing design of every screen. Never remove elements (header, logo, icons, text) from a page unless the prompt says so. "Only show X" means do not add extra things, not remove the layout.
 
 # Project
 - Name: Hospital Systems (HS) Helpdesk
@@ -53,3 +54,4 @@ Pending (greyed out, waits for admin) -> Admin clicks Approve -> Approved
 (e) PMS monitoring (hospitals list, hospital detail, import of PMS data)
 (f) Reports and Accounts
 (g) Machines page (only if the dept head wants it)
+
