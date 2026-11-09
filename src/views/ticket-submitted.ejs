@@ -7,8 +7,21 @@
     <link rel="stylesheet" href="/css/styles.css">
   </head>
   <body class="ticket-success-page">
+    <header class="public-header">
+      <a class="public-header-brand" href="/">
+        <img src="/images/logo.png" alt="">
+        <span>Brilliant Metal Craft and Machine Design OPC</span>
+      </a>
+      <a class="public-signin" href="/login">Sign in</a>
+    </header>
     <main class="ticket-success-content">
-      <h1><%= ticketNumber %></h1>
+      <span class="success-check" role="img" aria-label="Success">
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <path d="m8 16 5 5L24 10" />
+        </svg>
+      </span>
+      <h1>Request sent</h1>
+      <p>Your ticket number is <strong><%= ticketNumber %></strong>.<br>Admin will look at it soon.</p>
       <a class="button button-blue" href="/tickets/status?ticketNumber=<%= ticketNumber %>">Check ticket status</a>
     </main>
   </body>
