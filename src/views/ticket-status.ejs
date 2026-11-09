@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="public-form-page">
+    <header class="public-header">
+      <a class="public-header-brand" href="/">
+        <img src="/images/logo.png" alt="">
+        <span>Brilliant Metal Craft and Machine Design OPC</span>
+      </a>
+      <a class="public-signin" href="/login">Sign in</a>
+    </header>
+    <main class="ticket-status-content">
+      <h1>Check Ticket Status</h1>
+      <p class="ticket-page-intro">Enter your 6-digit ticket number to see the latest update.</p>
+      <form class="status-lookup-form" method="get" action="/tickets/status">
+        <label for="ticketNumber">Ticket Number</label>
+        <div class="status-lookup-controls">
+          <input id="ticketNumber" name="ticketNumber" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required value="<%= ticketNumber %>" aria-describedby="status-errors">
+          <button class="button button-blue" type="submit">Check Status</button>
+        </div>
+      </form>
+      <% if (errors.length > 0) { %>
+        <div class="ticket-form-errors" id="status-errors" role="alert">
+          <% errors.forEach((error) => { %><p><%= error %></p><% }); %>
+        </div>
+      <% } else if (ticketNumber && !ticket) { %>
+        <div class="status-not-found" role="status">
+          <h2>We couldn't find that ticket</h2>
+          <p>Check the 6-digit number and try again.</p>
+        </div>
+      <% } %>
+      <% if (ticket) { %>
+        <% const progressStatuses = ["pending", "approved", "in_progress", "resolved"]; %>
+        <% const progressIndex = ticket.status === "waiting_for_parts" ? 2 : progressStatuses.indexOf(ticket.status); %>
+        <% const statusLabels = { pending: "Pending", approved: "Approved", in_progress: "In Progress", waiting_for_parts: "Waiting for parts", resolved: "Resolved" }; %>
+        <section class="ticket-status-card" aria-labelledby="ticket-summary-title">
+          <div class="ticket-status-heading">
+            <div>
+              <p class="status-overline">TICKET <%= ticket.ticket_number %></p>
+              <h2 id="ticket-summary-title"><%= ticket.subject %></h2>
+            </div>
+            <span class="ticket-status-badge status-<%= ticket.status %>"><%= statusLabels[ticket.status] %></span>
+          </div>
+          <dl class="ticket-meta">
+            <div><dt>Ticket Number</dt><dd><%= ticket.ticket_number %></dd></div>
+            <div><dt>Submitted</dt><dd><%= new Date(ticket.created_at).toLocaleString() %></dd></div>
+            <div><dt>Hospital</dt><dd><%= ticket.hospital_name %></dd></div>
+            <div><dt>Assigned Technician</dt><dd><%= ticket.assigned_name || "Not assigned yet" %></dd></div>
+            <div><dt>Last Update</dt><dd><%= new Date(ticket.updated_at).toLocaleString() %></dd></div>
+          </dl>
+          <ol class="status-progress" aria-label="Ticket progress">
+            <% progressStatuses.forEach((status, index) => { %>
+              <li class="<%= index < progressIndex ? 'complete' : '' %> <%= index === progressIndex ? 'current' : '' %>">
+                <span class="progress-marker"><%= index < progressIndex ? "✓" : index + 1 %></span>
+                <span><%= statusLabels[status] %></span>
+              </li>
+            <% }); %>
+          </ol>
+          <section class="ticket-history" aria-labelledby="ticket-history-title">
+            <h3 id="ticket-history-title">History</h3>
+            <% if (history.length > 0) { %>
+              <ol>
+                <% history.forEach((entry) => { %>
+                  <li>
+                    <time datetime="<%= new Date(entry.created_at).toISOString() %>"><%= new Date(entry.created_at).toLocaleString() %></time>
+                    <p><%= entry.details || entry.action %></p>
+                  </li>
+                <% }); %>
+              </ol>
+            <% } else { %>
+              <p class="empty-history">No public updates yet.</p>
+            <% } %>
+          </section>
+        </section>
+      <% } %>
+    </main>
+  </body>
+</html>

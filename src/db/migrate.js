@@ -81,6 +81,15 @@ async function migrate() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
+    const [publicColumn] = await connection.query(
+      "SHOW COLUMNS FROM ticket_history WHERE Field = 'is_public'"
+    );
+    if (publicColumn.length === 0) {
+      await connection.query(
+        "ALTER TABLE ticket_history ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT FALSE AFTER details"
+      );
+    }
+
     console.log("Database migration completed.");
   } finally {
     await connection.end();

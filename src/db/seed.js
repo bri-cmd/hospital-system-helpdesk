@@ -3,6 +3,27 @@ require("dotenv").config();
 const bcrypt = require("bcryptjs");
 const { createPool } = require("../db");
 
+const hospitals = [
+  ["RTR", "RTR"],
+  ["SUMC", "SUMC"],
+  ["CUMC", "CUMC"],
+  ["TAGUM-MEDICAL-CITY", "Tagum Medical City"],
+  ["CIUDAD-DE-ZAMBOANGA", "Ciudad de Zamboanga"],
+  ["PMMG-PPC-HOSPITAL", "PMMG-PPC Hospital"],
+  ["TAGUM-DOCTORS-HOSPITAL", "Tagum Doctors Hospital"],
+  ["ADVENTIST-VALENCIA", "Adventist Medical Center - Valencia"],
+  ["GATCHALIAN-MEDICAL", "Gatchalian Medical Center"],
+  ["SAN-ISIDRO-POLYMEDIC", "San Isidro Polymedic General Hospital"],
+  ["VISAYAS-MED", "Visayas Med"],
+  ["NEGROS-POLYMEDIC", "Negros Polymedic Hospital"],
+  ["BROKENSHIRE-MEDICAL", "Brokenshire Medical Center"],
+  ["CAUAYAN-MEDICAL", "Cauayan Medical Specialist Hospital"],
+  ["SURIGAO-DOC", "Surigao DOC"],
+  ["CARAGA-O1", "Caraga Regional Hospital (O1)"],
+  ["CARAGA-O2", "Caraga Regional Hospital (O2)"],
+  ["MACTAN-MEDICAL", "Mactan Medical"]
+];
+
 function requiredEnv(name) {
   const value = process.env[name];
   if (!value) {
@@ -42,31 +63,20 @@ async function seed() {
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
+      await connection.execute("DELETE FROM tickets WHERE ticket_number = 'HS-DEMO-0001'");
       await connection.execute(
-        `INSERT INTO hospitals (code, name)
-         VALUES ('BMC-DEMO', 'BMC Demonstration Hospital')
-         ON DUPLICATE KEY UPDATE name = VALUES(name)`
+        `DELETE FROM hospitals
+         WHERE code = 'BMC-DEMO'
+           AND NOT EXISTS (SELECT 1 FROM tickets WHERE hospital_id = hospitals.id)`
       );
-      const [[hospital]] = await connection.execute(
-        "SELECT id FROM hospitals WHERE code = 'BMC-DEMO' LIMIT 1"
-      );
-      await connection.execute(
-        `INSERT INTO tickets (ticket_number, hospital_id, subject, description, status)
-         VALUES ('HS-DEMO-0001', ?, 'Oxygen plant pressure alarm', 'Demonstration ticket for an oxygen plant pressure alarm.', 'pending')
-         ON DUPLICATE KEY UPDATE hospital_id = VALUES(hospital_id), subject = VALUES(subject), description = VALUES(description)`,
-        [hospital.id]
-      );
-      const [[ticket]] = await connection.execute(
-        "SELECT id FROM tickets WHERE ticket_number = 'HS-DEMO-0001' LIMIT 1"
-      );
-      await connection.execute(
-        `INSERT INTO ticket_history (ticket_id, actor_name, action, details)
-         SELECT ?, 'System', 'Ticket created', 'Initial demonstration ticket.'
-         WHERE NOT EXISTS (
-           SELECT 1 FROM ticket_history WHERE ticket_id = ? AND action = 'Ticket created'
-         )`,
-        [ticket.id, ticket.id]
-      );
+      for (const [code, name] of hospitals) {
+        await connection.execute(
+          `INSERT INTO hospitals (code, name)
+           VALUES (?, ?)
+           ON DUPLICATE KEY UPDATE name = VALUES(name)`,
+          [code, name]
+        );
+      }
       await connection.commit();
     } catch (error) {
       await connection.rollback();

@@ -4,8 +4,10 @@ const bcrypt = require("bcryptjs");
 const express = require("express");
 const session = require("express-session");
 const helmet = require("helmet");
+const { rateLimit } = require("express-rate-limit");
 const path = require("path");
 const { createPool } = require("./db");
+const { randomInt } = require("crypto");
 
 if (!process.env.SESSION_SECRET) {
   throw new Error("Missing required environment variable: SESSION_SECRET");
@@ -15,11 +17,30 @@ const app = express();
 const pool = createPool();
 const port = Number(process.env.PORT || 3001);
 
+const submissionLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    res.status(429).render("placeholder", {
+      title: "Submission limit reached",
+      message: "Too many ticket submissions have been received. Please try again later."
+    });
+  }
+});
+
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 app.disable("x-powered-by");
 app.use(helmet());
-app.use(express.urlencoded({ extended: false, limit: "10kb" }));
+app.use((req, res, next) => {
+  if (req.method === "POST" && req.path === "/tickets/new") {
+    return submissionLimiter(req, res, next);
+  }
+  next();
+});
+app.use(express.urlencoded({ extended: false, limit: "64kb" }));
 app.use(express.static(path.join(__dirname, "..", "public")));
 app.use(
   session({
@@ -128,16 +149,174 @@ for (const page of staffPages) {
 }
 
 app.get("/tickets/new", (req, res) => {
-  res.render("placeholder", {
-    title: "Open a New Ticket",
-    message: "Ticket submission will be available in a later stage."
-  });
+  pool.execute("SELECT id, name FROM hospitals ORDER BY name")
+    .then(([hospitals]) => {
+      res.render("ticket-new", {
+        title: "Open a New Ticket",
+        hospitals,
+        values: { summary: "", hospitalId: "", details: "" },
+        errors: []
+      });
+    })
+    .catch((error) => {
+      console.error("Failed to load hospitals:", error.message);
+      res.status(500).render("error", { title: "Unable to load ticket form" });
+    });
 });
 
-app.get("/tickets/status", (req, res) => {
-  res.render("placeholder", {
+app.post("/tickets/new", async (req, res, next) => {
+  const summary = String(req.body.summary || "").trim();
+  const hospitalId = String(req.body.hospitalId || "").trim();
+  const details = String(req.body.details || "").trim();
+  const values = { summary, hospitalId, details };
+  const errors = [];
+
+  if (!summary) {
+    errors.push("Issue Summary is required.");
+  } else if (summary.length > 180) {
+    errors.push("Issue Summary must be 180 characters or fewer.");
+  }
+  if (!hospitalId || !/^\d+$/.test(hospitalId)) {
+    errors.push("Please select a hospital.");
+  }
+  if (!details) {
+    errors.push("Details are required.");
+  } else if (details.length > 5000) {
+    errors.push("Details must be 5,000 characters or fewer.");
+  }
+
+  try {
+    const [hospitals] = await pool.execute("SELECT id, name FROM hospitals ORDER BY name");
+    const selectedHospital = hospitals.find((hospital) => String(hospital.id) === hospitalId);
+    if (hospitalId && !selectedHospital) {
+      errors.push("Please select a hospital from the list.");
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).render("ticket-new", {
+        title: "Open a New Ticket",
+        hospitals,
+        values,
+        errors
+      });
+    }
+
+    const connection = await pool.getConnection();
+    let ticketNumber;
+    try {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        ticketNumber = String(randomInt(100000, 1000000));
+        await connection.beginTransaction();
+        try {
+          const [ticketResult] = await connection.execute(
+            `INSERT INTO tickets (ticket_number, hospital_id, subject, description, status)
+             VALUES (?, ?, ?, ?, 'pending')`,
+            [ticketNumber, selectedHospital.id, summary, details]
+          );
+          await connection.execute(
+            `INSERT INTO ticket_history
+             (ticket_id, actor_user_id, actor_name, action, details, is_public)
+             VALUES (?, NULL, 'employee (Self-service)', 'Ticket created by employee (Self-service)', 'Ticket submitted through the public self-service form.', TRUE)`,
+            [ticketResult.insertId]
+          );
+          await connection.commit();
+          break;
+        } catch (error) {
+          await connection.rollback();
+          const isTicketNumberCollision =
+            error.code === "ER_DUP_ENTRY" &&
+            String(error.sqlMessage || "").includes("uq_tickets_ticket_number");
+          if (!isTicketNumberCollision || attempt === 9) {
+            throw error;
+          }
+        }
+      }
+    } finally {
+      connection.release();
+    }
+
+    res.redirect(303, `/tickets/sent/${ticketNumber}`);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/tickets/sent/:ticketNumber", async (req, res, next) => {
+  const { ticketNumber } = req.params;
+  if (!/^\d{6}$/.test(ticketNumber)) {
+    return res.status(404).render("placeholder", {
+      title: "Page Not Found",
+      message: "The page you requested could not be found."
+    });
+  }
+
+  try {
+    const [tickets] = await pool.execute(
+      "SELECT ticket_number FROM tickets WHERE ticket_number = ? LIMIT 1",
+      [ticketNumber]
+    );
+    if (tickets.length === 0) {
+      return res.status(404).render("placeholder", {
+        title: "Page Not Found",
+        message: "The page you requested could not be found."
+      });
+    }
+
+    res.render("ticket-submitted", {
+      title: "Request sent",
+      ticketNumber: tickets[0].ticket_number
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/tickets/status", async (req, res, next) => {
+  const rawTicketNumber = req.query.ticketNumber || "";
+  const ticketNumber = typeof rawTicketNumber === "string" ? rawTicketNumber.trim() : "";
+  const errors = [];
+  let ticket = null;
+  let history = [];
+
+  if (ticketNumber) {
+    if (!/^\d{6}$/.test(ticketNumber)) {
+      errors.push("Enter a valid 6-digit ticket number.");
+    } else {
+      try {
+        const [tickets] = await pool.execute(
+          `SELECT t.ticket_number, t.subject, t.status, t.created_at, t.updated_at,
+                  h.name AS hospital_name, u.display_name AS assigned_name
+           FROM tickets t
+           JOIN hospitals h ON h.id = t.hospital_id
+           LEFT JOIN users u ON u.id = t.assigned_to
+           WHERE t.ticket_number = ?
+           LIMIT 1`,
+          [ticketNumber]
+        );
+        ticket = tickets[0] || null;
+        if (ticket) {
+          [history] = await pool.execute(
+            `SELECT action, details, created_at
+             FROM ticket_history
+             WHERE ticket_id = (
+               SELECT id FROM tickets WHERE ticket_number = ? LIMIT 1
+             ) AND is_public = TRUE
+             ORDER BY created_at ASC, id ASC`,
+            [ticketNumber]
+          );
+        }
+      } catch (error) {
+        return next(error);
+      }
+    }
+  }
+
+  res.render("ticket-status", {
     title: "Check Ticket Status",
-    message: "Ticket status lookup will be available in a later stage."
+    ticketNumber,
+    ticket,
+    history,
+    errors
   });
 });
 

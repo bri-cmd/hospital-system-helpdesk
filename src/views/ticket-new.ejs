@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+    <script src="/js/ticket-form.js" defer></script>
+  </head>
+  <body class="public-form-page">
+    <header class="public-header">
+      <a class="public-header-brand" href="/">
+        <img src="/images/logo.png" alt="">
+        <span>Brilliant Metal Craft and Machine Design OPC</span>
+      </a>
+      <a class="public-signin" href="/login">Sign in</a>
+    </header>
+    <main class="ticket-form-content">
+      <h1>Open a New Ticket</h1>
+      <p class="ticket-page-intro">Please fill in the form below to open a new ticket</p>
+      <section class="ticket-form-section" aria-labelledby="ticket-details-title">
+        <h2 id="ticket-details-title">Ticket Details</h2>
+        <p>Please describe your issue</p>
+        <% if (errors.length > 0) { %>
+          <div class="ticket-form-errors" role="alert">
+            <p>Please correct the following:</p>
+            <ul>
+              <% errors.forEach((error) => { %>
+                <li><%= error %></li>
+              <% }); %>
+            </ul>
+          </div>
+        <% } %>
+        <form id="ticket-form" method="post" action="/tickets/new" novalidate>
+          <div class="ticket-fields-row">
+            <div class="ticket-field">
+              <label for="summary">Issue Summary <span aria-hidden="true">*</span></label>
+              <input id="summary" name="summary" type="text" maxlength="180" required value="<%= values.summary %>" aria-describedby="summary-error">
+              <span id="summary-error" class="field-error" aria-live="polite"></span>
+            </div>
+            <div class="ticket-field">
+              <label for="hospitalId">Hospital <span aria-hidden="true">*</span></label>
+              <select id="hospitalId" name="hospitalId" required aria-describedby="hospital-error">
+                <option value="">Select a hospital</option>
+                <% hospitals.forEach((hospital) => { %>
+                  <option value="<%= hospital.id %>" <%= String(hospital.id) === values.hospitalId ? "selected" : "" %>><%= hospital.name %></option>
+                <% }); %>
+              </select>
+              <span id="hospital-error" class="field-error" aria-live="polite"></span>
+            </div>
+          </div>
+          <div class="ticket-field ticket-details-field">
+            <label for="details">Details <span aria-hidden="true">*</span></label>
+            <textarea id="details" name="details" maxlength="5000" required placeholder="Details on the reasons for opening the ticket" aria-describedby="details-error"><%= values.details %></textarea>
+            <span id="details-error" class="field-error" aria-live="polite"></span>
+          </div>
+          <div class="ticket-form-actions">
+            <button class="button button-blue" id="create-ticket" type="submit" disabled>Create Ticket</button>
+            <a class="button button-cancel" href="/">Cancel</a>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

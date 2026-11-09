@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="ticket-success-page">
+    <main class="ticket-success-content">
+      <h1><%= ticketNumber %></h1>
+      <a class="button button-blue" href="/tickets/status?ticketNumber=<%= ticketNumber %>">Check ticket status</a>
+    </main>
+  </body>
+</html>
