@@ -8,8 +8,11 @@
       { path: "dashboard", label: "Dashboard", href: "/staff/dashboard" },
       { path: "tickets", label: "Ticket queue", href: "/staff/tickets" },
       { path: "monitoring", label: "Monitoring", href: "/app/monitoring" },
-      { path: "reports", label: "Reports", href: "/app/reports" }
+      { path: "reports", label: "Reports", href: "/staff/reports" }
     ]; %>
+    <% if (currentUser.role === "admin") { %>
+      <% navigationPages.push({ path: "accounts", label: "Accounts", href: "/staff/accounts" }); %>
+    <% } %>
     <% navigationPages.forEach((page) => { %>
       <a class="<%= activePage === page.path ? 'active' : '' %>" href="<%= page.href %>"><%= page.label %></a>
     <% }); %>

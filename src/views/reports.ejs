@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="staff-page">
+    <%- include("partials/staff-sidebar", { activePage }) %>
+    <div class="staff-main">
+      <%- include("partials/staff-topbar", { notifications }) %>
+      <main class="staff-content reports-content">
+        <div class="reports-heading">
+          <div>
+            <h1>Reports</h1>
+            <p>Ticket activity and PMS status across hospitals.</p>
+          </div>
+          <% if (currentUser.role === "admin") { %>
+            <div class="report-export-actions">
+              <a class="button button-blue" href="/staff/reports/export/tickets.csv?month=<%= encodeURIComponent(selectedMonth) %>&amp;hospital=<%= encodeURIComponent(selectedHospitalId) %>">Export tickets (CSV)</a>
+              <a class="button button-blue" href="/staff/reports/export/pms.csv">Export PMS (CSV)</a>
+            </div>
+          <% } %>
+        </div>
+
+        <form class="report-filters staff-card" method="get" action="/staff/reports">
+          <label for="report-month">Period</label>
+          <input id="report-month" name="month" type="month" value="<%= selectedMonth %>" required>
+          <label for="report-hospital">Hospital</label>
+          <select id="report-hospital" name="hospital">
+            <option value="all" <%= selectedHospitalId === "all" ? "selected" : "" %>>All hospitals</option>
+            <% hospitals.forEach((hospital) => { %>
+              <option value="<%= hospital.id %>" <%= selectedHospitalId === String(hospital.id) ? "selected" : "" %>><%= hospital.name %></option>
+            <% }); %>
+          </select>
+          <button class="button button-blue" type="submit">Apply filters</button>
+        </form>
+        <% if (errorMessage) { %>
+          <p class="account-alert account-alert-error" role="alert"><%= errorMessage %></p>
+        <% } %>
+
+        <section class="report-summary-cards" aria-label="Report summary">
+          <article class="pms-summary-card">
+            <span>Tickets received</span>
+            <strong><%= received %></strong>
+          </article>
+          <article class="pms-summary-card pms-preparing">
+            <span>Tickets resolved</span>
+            <strong><%= resolved %></strong>
+          </article>
+          <article class="pms-summary-card pms-expiring">
+            <span>Pending approval</span>
+            <strong><%= pending %></strong>
+          </article>
+          <article class="pms-summary-card">
+            <span>Average time to resolve</span>
+            <strong class="report-duration"><%= averageDuration %></strong>
+          </article>
+          <article class="pms-summary-card pms-preparing">
+            <span>PMS on schedule</span>
+            <strong><%= pmsOnSchedule %>%</strong>
+          </article>
+        </section>
+
+        <section class="reports-grid">
+          <article class="dashboard-panel report-panel">
+            <h2>Tickets by hospital</h2>
+            <% if (hospitalTickets.length) { %>
+              <ol class="report-hospital-bars">
+                <% hospitalTickets.forEach((hospital) => { %>
+                  <li>
+                    <span class="report-bar-label"><%= hospital.hospital_name %></span>
+                    <span class="report-bar-track"><span style="width:<%= hospital.count / maxHospitalTickets * 100 %>%"></span></span>
+                    <strong><%= hospital.count %></strong>
+                  </li>
+                <% }); %>
+              </ol>
+            <% } else { %>
+              <p class="dashboard-empty-state">No tickets for this period.</p>
+            <% } %>
+          </article>
+          <article class="dashboard-panel report-panel">
+            <h2>Tickets by status</h2>
+            <ul class="report-count-list">
+              <% ["pending", "approved", "in_progress", "waiting_for_parts", "resolved"].forEach((status) => { %>
+                <li><span><%= ticketStatuses[status] %></span><strong><%= statusCounts[status] %></strong></li>
+              <% }); %>
+            </ul>
+          </article>
+          <article class="dashboard-panel report-panel">
+            <h2>Tickets by priority</h2>
+            <ul class="report-count-list">
+              <% ["Urgent", "High", "Medium", "Low"].forEach((priority) => { %>
+                <li><span><%= priority %></span><strong><%= priorityCounts[priority] %></strong></li>
+              <% }); %>
+            </ul>
+          </article>
+          <article class="dashboard-panel report-panel report-pms-panel">
+            <h2>PMS status by hospital</h2>
+            <div class="report-table-wrap">
+              <table class="report-pms-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Hospital</th>
+                    <th scope="col">Overdue</th>
+                    <th scope="col">Expiring soon</th>
+                    <th scope="col">For update</th>
+                    <th scope="col">On schedule %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <% pmsHospitals.forEach((hospital) => { %>
+                    <tr>
+                      <td><%= hospital.name %></td>
+                      <td><%= hospital.counts.overdue %></td>
+                      <td><%= hospital.counts.expiring_soon %></td>
+                      <td><%= hospital.counts.for_update %></td>
+                      <td><%= hospital.on_schedule %>%</td>
+                    </tr>
+                  <% }); %>
+                  <% if (!pmsHospitals.length) { %>
+                    <tr><td colspan="5">No PMS data yet.</td></tr>
+                  <% } %>
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

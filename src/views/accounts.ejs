@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="staff-page">
+    <%- include("partials/staff-sidebar", { activePage }) %>
+    <div class="staff-main">
+      <%- include("partials/staff-topbar", { notifications }) %>
+      <main class="staff-content accounts-content">
+        <div class="reports-heading">
+          <div>
+            <h1>Accounts</h1>
+            <p>Manage Hospital Systems staff and administrators.</p>
+          </div>
+        </div>
+        <% if (errorMessage) { %>
+          <p class="account-alert account-alert-error" role="alert"><%= errorMessage %></p>
+        <% } %>
+        <% if (notice) { %>
+          <p class="account-alert account-alert-success" role="status"><%= notice %></p>
+        <% } %>
+
+        <section class="dashboard-panel account-add-panel">
+          <details>
+            <summary>+ Add account</summary>
+            <form class="account-add-form" method="post" action="/staff/accounts">
+              <label for="new-account-name">Name</label>
+              <input id="new-account-name" name="name" type="text" maxlength="120" value="<%= addValues.name %>" required>
+              <label for="new-account-username">Username</label>
+              <input id="new-account-username" name="username" type="text" maxlength="80" autocomplete="off" value="<%= addValues.username %>" required>
+              <label for="new-account-role">Role</label>
+              <select id="new-account-role" name="role" required>
+                <option value="staff" <%= addValues.role === "staff" ? "selected" : "" %>>Staff</option>
+                <option value="admin" <%= addValues.role === "admin" ? "selected" : "" %>>Admin</option>
+              </select>
+              <label for="new-account-password">Temporary password</label>
+              <input id="new-account-password" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required>
+              <button class="button button-blue" type="submit">Add account</button>
+            </form>
+          </details>
+        </section>
+
+        <section class="dashboard-panel accounts-table-panel">
+          <h2>Accounts</h2>
+          <div class="report-table-wrap">
+            <table class="accounts-table">
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Username</th>
+                  <th scope="col">Role</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Last sign-in</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <% accounts.forEach((account) => { %>
+                  <tr>
+                    <td><strong><%= account.display_name %></strong><% if (account.is_primary_admin) { %><small class="account-main-admin">Main admin</small><% } %></td>
+                    <td><%= account.username %></td>
+                    <td><span class="account-role-badge role-<%= account.role %>"><%= account.role === "admin" ? "Admin" : "Staff" %></span></td>
+                    <td><span class="account-status <%= account.is_active ? 'is-active' : 'is-disabled' %>"><%= account.is_active ? "Active" : "Disabled" %></span></td>
+                    <td><%= account.last_sign_in ? new Date(account.last_sign_in).toLocaleString() : "Never" %></td>
+                    <td class="account-actions">
+                      <details>
+                        <summary>Edit</summary>
+                        <form method="post" action="/staff/accounts/<%= account.id %>/edit">
+                          <label for="account-name-<%= account.id %>">Name</label>
+                          <input id="account-name-<%= account.id %>" name="name" type="text" maxlength="120" value="<%= account.display_name %>" required>
+                          <label for="account-role-<%= account.id %>">Role</label>
+                          <select id="account-role-<%= account.id %>" name="role" required>
+                            <option value="staff" <%= account.role === "staff" ? "selected" : "" %>>Staff</option>
+                            <option value="admin" <%= account.role === "admin" ? "selected" : "" %>>Admin</option>
+                          </select>
+                          <button class="button button-blue" type="submit">Save changes</button>
+                        </form>
+                      </details>
+                      <details>
+                        <summary>Reset password</summary>
+                        <form method="post" action="/staff/accounts/<%= account.id %>/reset-password">
+                          <label for="account-password-<%= account.id %>">Temporary password</label>
+                          <input id="account-password-<%= account.id %>" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required>
+                          <button class="button button-blue" type="submit">Reset password</button>
+                        </form>
+                      </details>
+                      <form method="post" action="/staff/accounts/<%= account.id %>/status">
+                        <input type="hidden" name="action" value="<%= account.is_active ? 'disable' : 'enable' %>">
+                        <button class="account-status-button" type="submit" <%= account.is_primary_admin && account.is_active ? "disabled" : "" %>><%= account.is_active ? "Disable" : "Enable" %></button>
+                      </form>
+                    </td>
+                  </tr>
+                <% }); %>
+                <% if (!accounts.length) { %>
+                  <tr><td colspan="6">No accounts found.</td></tr>
+                <% } %>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="dashboard-panel account-history-panel">
+          <h2>Account changes</h2>
+          <div class="report-table-wrap">
+            <table class="accounts-history-table">
+              <thead>
+                <tr>
+                  <th scope="col">When</th>
+                  <th scope="col">Who</th>
+                  <th scope="col">Account</th>
+                  <th scope="col">Change</th>
+                  <th scope="col">Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                <% history.forEach((entry) => { %>
+                  <tr>
+                    <td><%= new Date(entry.created_at).toLocaleString() %></td>
+                    <td><%= entry.actor_name %></td>
+                    <td><%= entry.target_username %></td>
+                    <td><%= entry.action %></td>
+                    <td><%= entry.details || "" %></td>
+                  </tr>
+                <% }); %>
+                <% if (!history.length) { %>
+                  <tr><td colspan="5">No account changes recorded yet.</td></tr>
+                <% } %>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

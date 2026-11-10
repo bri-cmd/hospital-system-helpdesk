@@ -123,25 +123,29 @@ async function seed() {
       username: requiredEnv("ADMIN_USERNAME"),
       password: requiredEnv("ADMIN_PASSWORD"),
       displayName: requiredEnv("ADMIN_NAME"),
-      role: "admin"
+      role: "admin",
+      isPrimaryAdmin: true
     },
     {
       username: requiredEnv("STAFF_USERNAME"),
       password: requiredEnv("STAFF_PASSWORD"),
       displayName: requiredEnv("STAFF_NAME"),
-      role: "staff"
+      role: "staff",
+      isPrimaryAdmin: false
     },
     {
       username: `${requiredEnv("STAFF_USERNAME")}-tech1`.slice(0, 80),
       password: requiredEnv("STAFF_PASSWORD"),
       displayName: "Hospital Systems Technician 1",
-      role: "staff"
+      role: "staff",
+      isPrimaryAdmin: false
     },
     {
       username: `${requiredEnv("STAFF_USERNAME")}-tech2`.slice(0, 80),
       password: requiredEnv("STAFF_PASSWORD"),
       displayName: "Hospital Systems Technician 2",
-      role: "staff"
+      role: "staff",
+      isPrimaryAdmin: false
     }
   ];
 
@@ -149,10 +153,13 @@ async function seed() {
     for (const user of users) {
       const passwordHash = await bcrypt.hash(user.password, 12);
       await pool.execute(
-        `INSERT INTO users (username, password_hash, display_name, role)
-         VALUES (?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), display_name = VALUES(display_name), role = VALUES(role)`,
-        [user.username, passwordHash, user.displayName, user.role]
+        `INSERT INTO users (username, password_hash, display_name, role, is_primary_admin)
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash),
+                                 display_name = VALUES(display_name),
+                                 role = VALUES(role),
+                                 is_primary_admin = VALUES(is_primary_admin)`,
+        [user.username, passwordHash, user.displayName, user.role, user.isPrimaryAdmin]
       );
     }
 

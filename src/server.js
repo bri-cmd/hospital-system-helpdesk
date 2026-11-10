@@ -64,11 +64,32 @@ app.use((req, res, next) => {
   next();
 });
 
-function requireLogin(req, res, next) {
+async function requireLogin(req, res, next) {
   if (!req.session.user) {
     return res.redirect("/login");
   }
-  next();
+  try {
+    const [users] = await pool.execute(
+      "SELECT display_name, role, is_active FROM users WHERE id = ? LIMIT 1",
+      [req.session.user.id]
+    );
+    const user = users[0];
+    if (!user || !user.is_active) {
+      return req.session.destroy((error) => {
+        if (error) {
+          return next(error);
+        }
+        res.clearCookie("hs_helpdesk_session", { httpOnly: true, sameSite: "lax" });
+        res.redirect("/login?disabled=1");
+      });
+    }
+    req.session.user.displayName = user.display_name;
+    req.session.user.role = user.role;
+    res.locals.currentUser = req.session.user;
+    next();
+  } catch (error) {
+    next(error);
+  }
 }
 
 const ticketStatuses = {
@@ -262,6 +283,64 @@ function requireAdmin(req, res, next) {
     return res.status(403).render("error", { title: "Access denied" });
   }
   next();
+}
+
+function getReportMonthRange(month) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+    return null;
+  }
+  const [year, monthNumber] = month.split("-").map(Number);
+  if (year < 1000) {
+    return null;
+  }
+  const start = `${month}-01`;
+  const nextMonth = new Date(Date.UTC(year, monthNumber, 1));
+  const end = [
+    nextMonth.getUTCFullYear(),
+    String(nextMonth.getUTCMonth() + 1).padStart(2, "0"),
+    "01"
+  ].join("-");
+  return { start, end };
+}
+
+function csvCell(value) {
+  let text = value === null || value === undefined ? "" : String(value);
+  if (/^[\s]*[=+\-@]/.test(text)) {
+    text = `'${text}`;
+  }
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function toCsvDateTime(value) {
+  if (!value) {
+    return "";
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.valueOf()) ? "" : date.toISOString().slice(0, 19).replace("T", " ");
+}
+
+function sendCsv(res, filename, headers, rows) {
+  const lines = [headers, ...rows].map((row) => row.map(csvCell).join(","));
+  res.set({
+    "Content-Type": "text/csv; charset=utf-8",
+    "Content-Disposition": `attachment; filename="${filename}"`
+  });
+  res.send(`\uFEFF${lines.join("\r\n")}\r\n`);
+}
+
+function formatAverageDuration(milliseconds) {
+  if (milliseconds === null) {
+    return "No resolved tickets";
+  }
+  const minutes = milliseconds > 0
+    ? Math.max(1, Math.round(milliseconds / 60000))
+    : 0;
+  if (minutes >= 1440) {
+    const days = Math.round(minutes / 1440);
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours} hr ${minutes % 60} min`;
 }
 
 function renderPmsImport(res, options = {}) {
@@ -463,7 +542,7 @@ async function renderTicketDetail(req, res, statusCode = 200, errorMessage = nul
     [ticket.id]
   );
   const [staff] = await pool.execute(
-    "SELECT id, display_name FROM users WHERE role = 'staff' ORDER BY display_name"
+    "SELECT id, display_name FROM users WHERE role = 'staff' AND is_active = TRUE ORDER BY display_name"
   );
   const notifications = await getNotifications(req.session.user);
   const isPending = ticket.status === "pending";
@@ -494,7 +573,10 @@ app.get("/login", (req, res) => {
   if (req.session.user) {
     return res.redirect("/staff/dashboard");
   }
-  res.render("login", { title: "Staff Sign In", error: null });
+  res.render("login", {
+    title: "Staff Sign In",
+    error: req.query.disabled ? "This account is disabled. Contact an administrator." : null
+  });
 });
 
 app.post("/login", async (req, res, next) => {
@@ -503,7 +585,8 @@ app.post("/login", async (req, res, next) => {
 
   try {
     const [rows] = await pool.execute(
-      "SELECT id, username, password_hash, display_name, role FROM users WHERE username = ? LIMIT 1",
+      `SELECT id, username, password_hash, display_name, role, is_active
+       FROM users WHERE username = ? LIMIT 1`,
       [username]
     );
     const user = rows[0];
@@ -514,6 +597,30 @@ app.post("/login", async (req, res, next) => {
         title: "Staff Sign In",
         error: "The username or password is incorrect."
       });
+    }
+
+    if (!user.is_active) {
+      return res.status(403).render("login", {
+        title: "Staff Sign In",
+        error: "This account is disabled. Contact an administrator."
+      });
+    }
+
+    const [signInResult] = await pool.execute(
+      "UPDATE users SET last_sign_in = CURRENT_TIMESTAMP WHERE id = ? AND is_active = TRUE",
+      [user.id]
+    );
+    if (signInResult.affectedRows === 0) {
+      const [currentUsers] = await pool.execute(
+        "SELECT is_active FROM users WHERE id = ? LIMIT 1",
+        [user.id]
+      );
+      if (!currentUsers[0] || !currentUsers[0].is_active) {
+        return res.status(403).render("login", {
+          title: "Staff Sign In",
+          error: "This account is disabled. Contact an administrator."
+        });
+      }
     }
 
     req.session.regenerate((error) => {
@@ -548,9 +655,534 @@ app.post("/logout", requireLogin, (req, res, next) => {
   });
 });
 
-const staffPages = [
-  { path: "reports", label: "Reports" }
-];
+async function renderAccountsPage(req, res, options = {}) {
+  const [[accounts], [history]] = await Promise.all([
+    pool.execute(
+      `SELECT id, username, display_name, role, is_active, is_primary_admin, last_sign_in
+       FROM users ORDER BY display_name, username`
+    ),
+    pool.execute(
+      `SELECT actor_name, target_username, action, details, created_at
+       FROM user_account_history ORDER BY created_at DESC, id DESC LIMIT 25`
+    )
+  ]);
+  const notices = {
+    added: "Account added.",
+    updated: "Account updated.",
+    password: "Password reset.",
+    enabled: "Account enabled.",
+    disabled: "Account disabled.",
+    unchanged: "No account changes were needed."
+  };
+  return res.status(options.statusCode || 200).render("accounts", {
+    title: "Accounts",
+    activePage: "accounts",
+    notifications: await getNotifications(req.session.user),
+    accounts,
+    history,
+    errorMessage: options.errorMessage || null,
+    notice: notices[req.query.notice] || null,
+    addValues: options.addValues || { name: "", username: "", role: "staff" }
+  });
+}
+
+app.get("/staff/accounts", requireLogin, requireAdmin, async (req, res, next) => {
+  try {
+    await renderAccountsPage(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/staff/accounts", requireLogin, requireAdmin, async (req, res, next) => {
+  const displayName = String(req.body.name || "").trim();
+  const username = String(req.body.username || "").trim();
+  const role = String(req.body.role || "");
+  const password = String(req.body.password || "");
+  const addValues = { name: displayName, username, role };
+
+  if (!displayName || displayName.length > 120 || !username || username.length > 80 ||
+      !["admin", "staff"].includes(role) || password.length < 8 ||
+      Buffer.byteLength(password, "utf8") > 72) {
+    try {
+      return await renderAccountsPage(req, res, {
+        statusCode: 400,
+        errorMessage: "Enter a name (up to 120 characters), username (up to 80 characters), valid role, and a password of 8 to 72 UTF-8 bytes.",
+        addValues
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  let connection;
+  try {
+    const passwordHash = await bcrypt.hash(password, 12);
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [result] = await connection.execute(
+      `INSERT INTO users (username, password_hash, display_name, role)
+       VALUES (?, ?, ?, ?)`,
+      [username, passwordHash, displayName, role]
+    );
+    await connection.execute(
+      `INSERT INTO user_account_history
+         (actor_user_id, actor_name, target_user_id, target_username, action, details)
+       VALUES (?, ?, ?, ?, 'Account added', ?)`,
+      [
+        req.session.user.id,
+        req.session.user.displayName,
+        result.insertId,
+        username,
+        `Created ${role} account "${username}".`
+      ]
+    );
+    await connection.commit();
+    res.redirect("/staff/accounts?notice=added");
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    if (error.code === "ER_DUP_ENTRY") {
+      try {
+        return await renderAccountsPage(req, res, {
+          statusCode: 409,
+          errorMessage: "That username is already in use.",
+          addValues
+        });
+      } catch (renderError) {
+        return next(renderError);
+      }
+    }
+    next(error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
+
+app.post("/staff/accounts/:accountId/edit", requireLogin, requireAdmin, async (req, res, next) => {
+  const accountId = String(req.params.accountId || "");
+  const displayName = String(req.body.name || "").trim();
+  const role = String(req.body.role || "");
+  if (!/^\d+$/.test(accountId) || !displayName || displayName.length > 120 ||
+      !["admin", "staff"].includes(role)) {
+    try {
+      return await renderAccountsPage(req, res, {
+        statusCode: 400,
+        errorMessage: "Enter a valid name and role."
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      "SELECT id, username, display_name, role, is_primary_admin FROM users WHERE id = ? FOR UPDATE",
+      [accountId]
+    );
+    const account = rows[0];
+    if (!account) {
+      await connection.rollback();
+      return res.status(404).render("placeholder", {
+        title: "Account Not Found",
+        message: "The account could not be found."
+      });
+    }
+    if (account.is_primary_admin && role !== "admin") {
+      await connection.rollback();
+      return await renderAccountsPage(req, res, {
+        statusCode: 400,
+        errorMessage: "The main admin account cannot be demoted."
+      });
+    }
+
+    const changes = [];
+    if (account.display_name !== displayName) {
+      changes.push(`name changed from "${account.display_name}" to "${displayName}"`);
+    }
+    if (account.role !== role) {
+      changes.push(`role changed from ${account.role} to ${role}`);
+    }
+    if (!changes.length) {
+      await connection.rollback();
+      return res.redirect("/staff/accounts?notice=unchanged");
+    }
+    await connection.execute(
+      "UPDATE users SET display_name = ?, role = ? WHERE id = ?",
+      [displayName, role, accountId]
+    );
+    await connection.execute(
+      `INSERT INTO user_account_history
+         (actor_user_id, actor_name, target_user_id, target_username, action, details)
+       VALUES (?, ?, ?, ?, 'Account updated', ?)`,
+      [
+        req.session.user.id,
+        req.session.user.displayName,
+        account.id,
+        account.username,
+        changes.join("; ")
+      ]
+    );
+    await connection.commit();
+    res.redirect("/staff/accounts?notice=updated");
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    next(error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
+
+app.post("/staff/accounts/:accountId/reset-password", requireLogin, requireAdmin, async (req, res, next) => {
+  const accountId = String(req.params.accountId || "");
+  const password = String(req.body.password || "");
+  if (!/^\d+$/.test(accountId) || password.length < 8 || Buffer.byteLength(password, "utf8") > 72) {
+    try {
+      return await renderAccountsPage(req, res, {
+        statusCode: 400,
+        errorMessage: "The temporary password must contain 8 to 72 UTF-8 bytes."
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  let connection;
+  try {
+    const passwordHash = await bcrypt.hash(password, 12);
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      "SELECT id, username FROM users WHERE id = ? FOR UPDATE",
+      [accountId]
+    );
+    if (!rows[0]) {
+      await connection.rollback();
+      return res.status(404).render("placeholder", {
+        title: "Account Not Found",
+        message: "The account could not be found."
+      });
+    }
+    await connection.execute("UPDATE users SET password_hash = ? WHERE id = ?", [passwordHash, accountId]);
+    await connection.execute(
+      `INSERT INTO user_account_history
+         (actor_user_id, actor_name, target_user_id, target_username, action, details)
+       VALUES (?, ?, ?, ?, 'Password reset', 'Temporary password reset by administrator.')`,
+      [req.session.user.id, req.session.user.displayName, rows[0].id, rows[0].username]
+    );
+    await connection.commit();
+    res.redirect("/staff/accounts?notice=password");
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    next(error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
+
+app.post("/staff/accounts/:accountId/status", requireLogin, requireAdmin, async (req, res, next) => {
+  const accountId = String(req.params.accountId || "");
+  const action = String(req.body.action || "");
+  if (!/^\d+$/.test(accountId) || !["disable", "enable"].includes(action)) {
+    try {
+      return await renderAccountsPage(req, res, {
+        statusCode: 400,
+        errorMessage: "Select a valid account status action."
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+  if (action === "disable" && String(req.session.user.id) === accountId) {
+    try {
+      return await renderAccountsPage(req, res, {
+        statusCode: 400,
+        errorMessage: "You cannot disable your own account."
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      "SELECT id, username, is_active, is_primary_admin FROM users WHERE id = ? FOR UPDATE",
+      [accountId]
+    );
+    const account = rows[0];
+    if (!account) {
+      await connection.rollback();
+      return res.status(404).render("placeholder", {
+        title: "Account Not Found",
+        message: "The account could not be found."
+      });
+    }
+    if (action === "disable" && String(account.id) === String(req.session.user.id)) {
+      await connection.rollback();
+      return await renderAccountsPage(req, res, {
+        statusCode: 400,
+        errorMessage: "You cannot disable your own account."
+      });
+    }
+    if (action === "disable" && account.is_primary_admin) {
+      await connection.rollback();
+      return await renderAccountsPage(req, res, {
+        statusCode: 400,
+        errorMessage: "The main admin account cannot be disabled."
+      });
+    }
+    const isActive = action === "enable";
+    if (Boolean(account.is_active) === isActive) {
+      await connection.rollback();
+      return res.redirect("/staff/accounts?notice=unchanged");
+    }
+
+    await connection.execute("UPDATE users SET is_active = ? WHERE id = ?", [isActive, accountId]);
+    await connection.execute(
+      `INSERT INTO user_account_history
+         (actor_user_id, actor_name, target_user_id, target_username, action, details)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        req.session.user.id,
+        req.session.user.displayName,
+        account.id,
+        account.username,
+        isActive ? "Account enabled" : "Account disabled",
+        `${isActive ? "Enabled" : "Disabled"} account "${account.username}".`
+      ]
+    );
+    await connection.commit();
+    res.redirect(`/staff/accounts?notice=${isActive ? "enabled" : "disabled"}`);
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    next(error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
+
+async function getSelectedReportHospital(value) {
+  const [hospitals] = await pool.execute("SELECT id, name FROM hospitals ORDER BY name");
+  if (!value || value === "all") {
+    return { hospitals, selectedHospital: null, errorMessage: null };
+  }
+  const selectedHospital = /^\d+$/.test(value)
+    ? hospitals.find((hospital) => String(hospital.id) === value)
+    : null;
+  return {
+    hospitals,
+    selectedHospital: selectedHospital || null,
+    errorMessage: selectedHospital ? null : "Select a valid hospital."
+  };
+}
+
+app.get("/staff/reports", requireLogin, async (req, res, next) => {
+  const requestedMonth = typeof req.query.month === "string" ? req.query.month : "";
+  const currentMonth = getTodayDate().slice(0, 7);
+  const month = requestedMonth ? requestedMonth : currentMonth;
+  const period = getReportMonthRange(month);
+  const reportMonth = period ? month : currentMonth;
+  const reportPeriod = period || getReportMonthRange(currentMonth);
+
+  try {
+    const filter = await getSelectedReportHospital(
+      typeof req.query.hospital === "string" ? req.query.hospital : "all"
+    );
+    const selectedHospital = filter.selectedHospital;
+    const isStaff = req.session.user.role === "staff";
+    const ticketConditions = ["t.created_at >= ?", "t.created_at < ?"];
+    const ticketParams = [reportPeriod.start, reportPeriod.end];
+    if (selectedHospital) {
+      ticketConditions.push("t.hospital_id = ?");
+      ticketParams.push(selectedHospital.id);
+    }
+    if (isStaff) {
+      ticketConditions.push("t.assigned_to = ?");
+      ticketParams.push(req.session.user.id);
+    }
+    const ticketWhere = ticketConditions.join(" AND ");
+    const [hospitalTickets, statusRows, priorityRows, resolvedRows] = await Promise.all([
+      pool.execute(
+        `SELECT h.name AS hospital_name, COUNT(*) AS count
+         FROM tickets t JOIN hospitals h ON h.id = t.hospital_id
+         WHERE ${ticketWhere}
+         GROUP BY h.id, h.name
+         ORDER BY count DESC, h.name`,
+        ticketParams
+      ),
+      pool.execute(
+        `SELECT t.status, COUNT(*) AS count
+         FROM tickets t WHERE ${ticketWhere}
+         GROUP BY t.status`,
+        ticketParams
+      ),
+      pool.execute(
+        `SELECT t.priority, COUNT(*) AS count
+         FROM tickets t WHERE ${ticketWhere}
+         GROUP BY t.priority`,
+        ticketParams
+      ),
+      pool.execute(
+        `SELECT t.id,
+                TIMESTAMPDIFF(SECOND, t.created_at, MAX(th.created_at)) AS duration_seconds
+         FROM tickets t
+         JOIN ticket_history th ON th.ticket_id = t.id
+         WHERE th.action = 'Status changed'
+           AND th.details LIKE '% to Resolved%'
+           AND th.created_at >= ? AND th.created_at < ?
+           ${selectedHospital ? "AND t.hospital_id = ?" : ""}
+           ${isStaff ? "AND t.assigned_to = ?" : ""}
+         GROUP BY t.id, t.created_at`,
+        [
+          reportPeriod.start,
+          reportPeriod.end,
+          ...(selectedHospital ? [selectedHospital.id] : []),
+          ...(isStaff ? [req.session.user.id] : [])
+        ]
+      )
+    ]);
+    const statusCounts = Object.fromEntries(Object.keys(ticketStatuses).map((status) => [status, 0]));
+    statusRows[0].forEach((row) => {
+      statusCounts[row.status] = Number(row.count) || 0;
+    });
+    const received = Object.values(statusCounts).reduce((total, count) => total + count, 0);
+    const priorityCounts = Object.fromEntries(ticketPriorities.map((priority) => [priority, 0]));
+    priorityRows[0].forEach((row) => {
+      priorityCounts[row.priority] = Number(row.count) || 0;
+    });
+    const durations = resolvedRows[0]
+      .map((ticket) => Number(ticket.duration_seconds) * 1000)
+      .filter((duration) => Number.isFinite(duration) && duration >= 0);
+    const averageDuration = durations.length
+      ? durations.reduce((sum, duration) => sum + duration, 0) / durations.length
+      : null;
+
+    const pms = await getPmsOverview();
+    const pmsHospitals = pms.hospitals
+      .filter((hospital) => !selectedHospital || String(hospital.id) === String(selectedHospital.id))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    const pmsTotal = pmsHospitals.reduce((total, hospital) => total + hospital.total, 0);
+    const pmsPreparing = pmsHospitals.reduce((total, hospital) => total + hospital.counts.preparing, 0);
+    const notifications = await getNotifications(req.session.user);
+    res.render("reports", {
+      title: "Reports",
+      activePage: "reports",
+      notifications,
+      hospitals: filter.hospitals,
+      selectedMonth: reportMonth,
+      selectedHospitalId: selectedHospital ? String(selectedHospital.id) : "all",
+      ticketStatuses,
+      errorMessage: filter.errorMessage || (!period && requestedMonth ? "Select a valid month." : null),
+      received,
+      resolved: resolvedRows[0].length,
+      pending: statusCounts.pending || 0,
+      averageDuration: formatAverageDuration(averageDuration),
+      pmsOnSchedule: pmsTotal ? Math.round((pmsPreparing / pmsTotal) * 100) : 0,
+      hospitalTickets: hospitalTickets[0].map((row) => ({ ...row, count: Number(row.count) })),
+      maxHospitalTickets: Math.max(1, ...hospitalTickets[0].map((row) => Number(row.count))),
+      statusCounts,
+      priorityCounts,
+      pmsHospitals
+    });
+  } catch (error) {
+    console.error("Failed to load reports:", error);
+    next(error);
+  }
+});
+
+app.get("/staff/reports/export/tickets.csv", requireLogin, requireAdmin, async (req, res, next) => {
+  const month = typeof req.query.month === "string" && req.query.month
+    ? req.query.month
+    : getTodayDate().slice(0, 7);
+  const period = getReportMonthRange(month);
+  if (!period) {
+    return res.status(400).send("Select a valid month.");
+  }
+  try {
+    const filter = await getSelectedReportHospital(
+      typeof req.query.hospital === "string" ? req.query.hospital : "all"
+    );
+    if (filter.errorMessage) {
+      return res.status(400).send(filter.errorMessage);
+    }
+    const params = [period.start, period.end];
+    const hospitalCondition = filter.selectedHospital ? "AND t.hospital_id = ?" : "";
+    if (filter.selectedHospital) {
+      params.push(filter.selectedHospital.id);
+    }
+    const [tickets] = await pool.execute(
+      `SELECT t.ticket_number, h.name AS hospital_name, t.subject, t.priority, t.status,
+              u.display_name AS assigned_name, t.created_at
+       FROM tickets t
+       LEFT JOIN hospitals h ON h.id = t.hospital_id
+       LEFT JOIN users u ON u.id = t.assigned_to
+       WHERE t.created_at >= ? AND t.created_at < ? ${hospitalCondition}
+       ORDER BY t.created_at, t.id`,
+      params
+    );
+    sendCsv(res, `tickets-${month}.csv`,
+      ["Ticket number", "Hospital", "Subject", "Priority", "Status", "Assigned to", "Created at"],
+      tickets.map((ticket) => [
+        ticket.ticket_number,
+        ticket.hospital_name,
+        ticket.subject,
+        ticket.priority,
+        ticketStatuses[ticket.status] || ticket.status,
+        ticket.assigned_name,
+        toCsvDateTime(ticket.created_at)
+      ])
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/staff/reports/export/pms.csv", requireLogin, requireAdmin, async (req, res, next) => {
+  try {
+    const pms = await getPmsOverview();
+    sendCsv(res, "pms-items.csv",
+      ["Hospital", "Group", "Item", "Part number", "Quantity", "Frequency months", "Last done", "Next PMS", "Status"],
+      pms.items.map((item) => [
+        item.hospital_name,
+        item.group_name,
+        item.item,
+        item.part_number,
+        item.qty,
+        item.frequency_months,
+        dateOnly(item.last_done),
+        dateOnly(item.next_pms),
+        pmsStatuses[item.status]
+      ])
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/app/reports", requireLogin, (req, res) => {
+  res.redirect("/staff/reports");
+});
 
 app.get("/app/monitoring", requireLogin, (req, res) => {
   res.redirect("/staff/monitoring");
@@ -928,22 +1560,6 @@ app.get("/staff/dashboard", requireLogin, async (req, res, next) => {
   }
 });
 
-for (const page of staffPages) {
-  app.get(`/app/${page.path}`, requireLogin, async (req, res, next) => {
-    try {
-      const notifications = await getNotifications(req.session.user);
-      res.render("staff-page", {
-        title: page.label,
-        activePage: page.path,
-        pageLabel: page.label,
-        notifications
-      });
-    } catch (error) {
-      next(error);
-    }
-  });
-}
-
 app.get("/app/tickets", requireLogin, (req, res) => {
   res.redirect("/staff/tickets");
 });
@@ -1119,7 +1735,7 @@ app.post("/staff/tickets/:ticketNumber/update", requireLogin, async (req, res, n
         return renderTicketDetailSafely(req, res, next, 400, "Select a valid staff technician.");
       }
       const [staff] = await connection.execute(
-        "SELECT id, display_name FROM users WHERE id = ? AND role = 'staff' LIMIT 1",
+        "SELECT id, display_name FROM users WHERE id = ? AND role = 'staff' AND is_active = TRUE LIMIT 1",
         [assignedTo]
       );
       technician = staff[0];

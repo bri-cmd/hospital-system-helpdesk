@@ -27,10 +27,45 @@ async function migrate() {
         password_hash VARCHAR(255) NOT NULL,
         display_name VARCHAR(120) NOT NULL,
         role ENUM('admin', 'staff') NOT NULL,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        is_primary_admin BOOLEAN NOT NULL DEFAULT FALSE,
+        last_sign_in TIMESTAMP NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
         UNIQUE KEY uq_users_username (username)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    const userColumns = [
+      ["is_active", "BOOLEAN NOT NULL DEFAULT TRUE"],
+      ["is_primary_admin", "BOOLEAN NOT NULL DEFAULT FALSE"],
+      ["last_sign_in", "TIMESTAMP NULL"]
+    ];
+    for (const [column, definition] of userColumns) {
+      const [existingColumns] = await connection.query(
+        "SHOW COLUMNS FROM users WHERE Field = ?",
+        [column]
+      );
+      if (existingColumns.length === 0) {
+        await connection.query(`ALTER TABLE users ADD COLUMN ${column} ${definition}`);
+      }
+    }
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS user_account_history (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        actor_user_id BIGINT UNSIGNED NULL,
+        actor_name VARCHAR(120) NOT NULL,
+        target_user_id BIGINT UNSIGNED NULL,
+        target_username VARCHAR(80) NOT NULL,
+        action VARCHAR(40) NOT NULL,
+        details VARCHAR(500) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY ix_user_account_history_created (created_at),
+        CONSTRAINT fk_user_account_history_actor FOREIGN KEY (actor_user_id) REFERENCES users (id) ON DELETE SET NULL,
+        CONSTRAINT fk_user_account_history_target FOREIGN KEY (target_user_id) REFERENCES users (id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
