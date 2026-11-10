@@ -69,6 +69,103 @@ function requireLogin(req, res, next) {
   next();
 }
 
+const ticketStatuses = {
+  pending: "Pending",
+  approved: "Approved",
+  in_progress: "In Progress",
+  waiting_for_parts: "Waiting for parts",
+  resolved: "Resolved"
+};
+const editableTicketStatuses = ["approved", "in_progress", "waiting_for_parts", "resolved"];
+const ticketPriorities = ["Urgent", "High", "Medium", "Low"];
+
+async function getNotifications(user) {
+  const whereClause = user.role === "admin" ? "t.status = 'pending'" : "t.assigned_to = ?";
+  const params = user.role === "admin" ? [] : [user.id];
+  const [[{ count }]] = await pool.execute(
+    `SELECT COUNT(*) AS count FROM tickets t WHERE ${whereClause}`,
+    params
+  );
+  const [tickets] = await pool.execute(
+    `SELECT t.ticket_number, t.subject, h.name AS hospital_name
+     FROM tickets t
+     JOIN hospitals h ON h.id = t.hospital_id
+     WHERE ${whereClause}
+     ORDER BY t.updated_at DESC, t.id DESC
+     LIMIT 5`,
+    params
+  );
+
+  return { count: Number(count), tickets };
+}
+
+async function renderTicketDetail(req, res, statusCode = 200, errorMessage = null) {
+  const { ticketNumber } = req.params;
+  if (!/^\d{6}$/.test(ticketNumber)) {
+    return res.status(404).render("placeholder", {
+      title: "Page Not Found",
+      message: "The page you requested could not be found."
+    });
+  }
+
+  async function renderTicketDetailSafely(req, res, next, statusCode, errorMessage) {
+    try {
+      return await renderTicketDetail(req, res, statusCode, errorMessage);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  const [tickets] = await pool.execute(
+    `SELECT t.id, t.ticket_number, t.subject, t.description, t.status, t.priority,
+            t.assigned_to, t.created_at, h.name AS hospital_name,
+            u.display_name AS assigned_name
+     FROM tickets t
+     JOIN hospitals h ON h.id = t.hospital_id
+     LEFT JOIN users u ON u.id = t.assigned_to
+     WHERE t.ticket_number = ?
+     LIMIT 1`,
+    [ticketNumber]
+  );
+  const ticket = tickets[0];
+  if (!ticket) {
+    return res.status(404).render("placeholder", {
+      title: "Ticket Not Found",
+      message: "The ticket number could not be found."
+    });
+  }
+
+  const [historyRows] = await pool.execute(
+    `SELECT actor_name, action, details, created_at, is_public
+     FROM ticket_history
+     WHERE ticket_id = ?
+     ORDER BY created_at ASC, id ASC`,
+    [ticket.id]
+  );
+  const [staff] = await pool.execute(
+    "SELECT id, display_name FROM users WHERE role = 'staff' ORDER BY display_name"
+  );
+  const notifications = await getNotifications(req.session.user);
+  const isPending = ticket.status === "pending";
+  const isResolved = ticket.status === "resolved";
+  const canEdit = !isPending && (!isResolved || req.session.user.role === "admin");
+
+  return res.status(statusCode).render("ticket-detail", {
+    title: `Ticket-${ticket.ticket_number}`,
+    activePage: "tickets",
+    ticket,
+    history: historyRows,
+    staff,
+    notifications,
+    ticketStatuses,
+    editableTicketStatuses,
+    ticketPriorities,
+    canApprove: isPending && req.session.user.role === "admin",
+    canEdit,
+    errorMessage
+  });
+}
+
 app.get("/", (req, res) => {
   res.render("home", { title: "Hospital Systems Helpdesk" });
 });
@@ -133,20 +230,286 @@ app.post("/logout", requireLogin, (req, res, next) => {
 
 const staffPages = [
   { path: "dashboard", label: "Dashboard" },
-  { path: "tickets", label: "Ticket queue" },
   { path: "monitoring", label: "Monitoring" },
   { path: "reports", label: "Reports" }
 ];
 
 for (const page of staffPages) {
-  app.get(`/app/${page.path}`, requireLogin, (req, res) => {
-    res.render("staff-page", {
-      title: page.label,
-      activePage: page.path,
-      pageLabel: page.label
-    });
+  app.get(`/app/${page.path}`, requireLogin, async (req, res, next) => {
+    try {
+      const notifications = await getNotifications(req.session.user);
+      res.render("staff-page", {
+        title: page.label,
+        activePage: page.path,
+        pageLabel: page.label,
+        notifications
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 }
+
+app.get("/app/tickets", requireLogin, (req, res) => {
+  res.redirect("/staff/tickets");
+});
+
+app.get("/staff/tickets", requireLogin, async (req, res, next) => {
+  const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
+  const requestedStatus = typeof req.query.status === "string" ? req.query.status : "all";
+  const selectedStatus = ["all", ...Object.keys(ticketStatuses)].includes(requestedStatus)
+    ? requestedStatus
+    : "all";
+  const conditions = [];
+  const params = [];
+
+  if (selectedStatus !== "all") {
+    conditions.push("t.status = ?");
+    params.push(selectedStatus);
+  }
+  if (search) {
+    conditions.push("(t.ticket_number LIKE ? OR h.name LIKE ? OR t.subject LIKE ?)");
+    const searchTerm = `%${search}%`;
+    params.push(searchTerm, searchTerm, searchTerm);
+  }
+
+  try {
+    const [tickets] = await pool.execute(
+      `SELECT t.ticket_number, t.subject, t.status, t.priority, t.created_at, h.name AS hospital_name
+       FROM tickets t
+       JOIN hospitals h ON h.id = t.hospital_id
+       ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+       ORDER BY t.created_at DESC, t.id DESC`,
+      params
+    );
+    const notifications = await getNotifications(req.session.user);
+    res.render("ticket-queue", {
+      title: "Ticket queue",
+      activePage: "tickets",
+      tickets,
+      search,
+      selectedStatus,
+      ticketStatuses,
+      notifications
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/staff/tickets/:ticketNumber", requireLogin, async (req, res, next) => {
+  try {
+    await renderTicketDetail(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/staff/tickets/:ticketNumber/approve", requireLogin, async (req, res, next) => {
+  if (req.session.user.role !== "admin") {
+    return res.status(403).render("error", { title: "Access denied" });
+  }
+  if (!/^\d{6}$/.test(req.params.ticketNumber)) {
+    return res.status(404).render("placeholder", {
+      title: "Page Not Found",
+      message: "The page you requested could not be found."
+    });
+  }
+
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [tickets] = await connection.execute(
+      "SELECT id, status FROM tickets WHERE ticket_number = ? FOR UPDATE",
+      [req.params.ticketNumber]
+    );
+    const ticket = tickets[0];
+    if (!ticket) {
+      await connection.rollback();
+      return res.status(404).render("placeholder", {
+        title: "Ticket Not Found",
+        message: "The ticket number could not be found."
+      });
+    }
+    if (ticket.status !== "pending") {
+      await connection.rollback();
+      return res.redirect(`/staff/tickets/${req.params.ticketNumber}`);
+    }
+
+    await connection.execute("UPDATE tickets SET status = 'approved' WHERE id = ?", [ticket.id]);
+    await connection.execute(
+      `INSERT INTO ticket_history (ticket_id, actor_user_id, actor_name, action, details, is_public)
+       VALUES (?, ?, ?, 'Approved', ?, TRUE)`,
+      [
+        ticket.id,
+        req.session.user.id,
+        req.session.user.displayName,
+        `Approved by ${req.session.user.displayName}`
+      ]
+    );
+    await connection.commit();
+    res.redirect(`/staff/tickets/${req.params.ticketNumber}`);
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    next(error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
+
+app.post("/staff/tickets/:ticketNumber/update", requireLogin, async (req, res, next) => {
+  if (!/^\d{6}$/.test(req.params.ticketNumber)) {
+    return res.status(404).render("placeholder", {
+      title: "Page Not Found",
+      message: "The page you requested could not be found."
+    });
+  }
+
+  const status = String(req.body.status || "");
+  const assignedTo = String(req.body.assignedTo || "");
+  const note = String(req.body.note || "").trim();
+  const publicMessage = String(req.body.publicMessage || "").trim();
+  const priority = String(req.body.priority || "");
+  if ((note && note.length > 5000) || (publicMessage && publicMessage.length > 2000)) {
+    return renderTicketDetailSafely(
+      req,
+      res,
+      next,
+      400,
+      "Notes must be 5,000 characters or fewer and public messages 2,000 characters or fewer."
+    );
+  }
+  if (req.session.user.role === "admin" && priority && !ticketPriorities.includes(priority)) {
+    return renderTicketDetailSafely(req, res, next, 400, "Select a valid priority.");
+  }
+
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [tickets] = await connection.execute(
+      `SELECT id, status, priority, assigned_to
+       FROM tickets
+       WHERE ticket_number = ?
+       FOR UPDATE`,
+      [req.params.ticketNumber]
+    );
+    const ticket = tickets[0];
+    if (!ticket) {
+      await connection.rollback();
+      return res.status(404).render("placeholder", {
+        title: "Ticket Not Found",
+        message: "The ticket number could not be found."
+      });
+    }
+    if (ticket.status === "pending" || (ticket.status === "resolved" && req.session.user.role !== "admin")) {
+      await connection.rollback();
+      return res.status(403).render("error", { title: "Ticket cannot be edited" });
+    }
+    if (!editableTicketStatuses.includes(status)) {
+      await connection.rollback();
+      return renderTicketDetailSafely(req, res, next, 400, "Select a valid ticket status.");
+    }
+
+    let technician = null;
+    if (assignedTo) {
+      if (!/^\d+$/.test(assignedTo)) {
+        await connection.rollback();
+        return renderTicketDetailSafely(req, res, next, 400, "Select a valid staff technician.");
+      }
+      const [staff] = await connection.execute(
+        "SELECT id, display_name FROM users WHERE id = ? AND role = 'staff' LIMIT 1",
+        [assignedTo]
+      );
+      technician = staff[0];
+      if (!technician) {
+        await connection.rollback();
+        return renderTicketDetailSafely(req, res, next, 400, "Select a valid staff technician.");
+      }
+    }
+
+    const assignmentChanged = String(ticket.assigned_to || "") !== assignedTo;
+    const effectiveStatus = assignmentChanged && technician ? "in_progress" : status;
+    const changes = [];
+
+    if (ticket.status !== effectiveStatus) {
+      changes.push({
+        action: "Status changed",
+        details: `Status changed from ${ticketStatuses[ticket.status]} to ${ticketStatuses[effectiveStatus]}`,
+        isPublic: true
+      });
+    }
+    if (assignmentChanged) {
+      changes.push({
+        action: "Technician assignment changed",
+        details: technician
+          ? `Assigned to ${technician.display_name}`
+          : "Technician assignment removed",
+        isPublic: false
+      });
+    }
+    if (req.session.user.role === "admin" && priority && ticket.priority !== priority) {
+      changes.push({
+        action: "Priority changed",
+        details: `Priority changed from ${ticket.priority} to ${priority}`,
+        isPublic: false
+      });
+    }
+    if (note) {
+      changes.push({ action: "Note", details: note, isPublic: false });
+    }
+    if (publicMessage) {
+      changes.push({ action: "Public message", details: publicMessage, isPublic: true });
+    }
+    if (changes.length === 0) {
+      await connection.rollback();
+      return renderTicketDetailSafely(req, res, next, 400, "Make an update or add a note before saving.");
+    }
+
+    await connection.execute(
+      `UPDATE tickets
+       SET status = ?, assigned_to = ?, priority = ?
+       WHERE id = ?`,
+      [
+        effectiveStatus,
+        assignedTo || null,
+        req.session.user.role === "admin" && priority ? priority : ticket.priority,
+        ticket.id
+      ]
+    );
+    for (const change of changes) {
+      await connection.execute(
+        `INSERT INTO ticket_history
+           (ticket_id, actor_user_id, actor_name, action, details, is_public)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          ticket.id,
+          req.session.user.id,
+          req.session.user.displayName,
+          change.action,
+          change.details,
+          change.isPublic
+        ]
+      );
+    }
+    await connection.commit();
+    res.redirect(`/staff/tickets/${req.params.ticketNumber}`);
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    next(error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
 
 app.get("/tickets/new", (req, res) => {
   pool.execute("SELECT id, name FROM hospitals ORDER BY name")

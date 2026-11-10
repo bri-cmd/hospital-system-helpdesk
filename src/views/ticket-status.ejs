@@ -35,8 +35,8 @@
         </div>
       <% } %>
       <% if (ticket) { %>
-        <% const progressStatuses = ["pending", "approved", "in_progress", "resolved"]; %>
-        <% const progressIndex = ticket.status === "waiting_for_parts" ? 2 : progressStatuses.indexOf(ticket.status); %>
+        <% const progressStatuses = ["pending", "approved", "in_progress", "waiting_for_parts", "resolved"]; %>
+        <% const progressIndex = progressStatuses.indexOf(ticket.status); %>
         <% const statusLabels = { pending: "Pending", approved: "Approved", in_progress: "In Progress", waiting_for_parts: "Waiting for parts", resolved: "Resolved" }; %>
         <section class="ticket-status-card" aria-labelledby="ticket-summary-title">
           <div class="ticket-status-heading">

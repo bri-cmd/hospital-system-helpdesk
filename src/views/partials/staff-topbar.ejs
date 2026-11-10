@@ -1,0 +1,38 @@
+<header class="topbar">
+  <div class="topbar-spacer"></div>
+  <details class="notification-menu">
+    <summary aria-label="Notifications: <%= notifications.count %>">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+        <path d="M10 21a2 2 0 0 0 4 0" />
+      </svg>
+      <span class="notification-count"><%= notifications.count > 99 ? "99+" : notifications.count %></span>
+    </summary>
+    <div class="notification-popover">
+      <h2><%= currentUser.role === "admin" ? "Pending tickets" : "Assigned tickets" %></h2>
+      <% if (notifications.tickets.length > 0) { %>
+        <ul>
+          <% notifications.tickets.forEach((ticket) => { %>
+            <li>
+              <a href="/staff/tickets/<%= ticket.ticket_number %>">
+                <strong>Ticket-<%= ticket.ticket_number %></strong>
+                <span><%= ticket.subject %></span>
+                <small><%= ticket.hospital_name %></small>
+              </a>
+            </li>
+          <% }); %>
+        </ul>
+      <% } else { %>
+        <p>No tickets to review.</p>
+      <% } %>
+    </div>
+  </details>
+  <div class="user-summary">
+    <span class="user-avatar" aria-hidden="true"><%= currentUser.displayName.slice(0, 1).toUpperCase() %></span>
+    <span class="user-name"><%= currentUser.displayName %></span>
+    <span class="role-badge"><%= currentUser.role === "admin" ? "Admin" : "Staff" %></span>
+  </div>
+  <form class="logout-form" method="post" action="/logout">
+    <button type="submit" class="logout-button">Sign out</button>
+  </form>
+</header>

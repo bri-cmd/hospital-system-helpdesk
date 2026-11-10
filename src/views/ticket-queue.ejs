@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+    <script src="/js/ticket-queue.js" defer></script>
+  </head>
+  <body class="staff-page">
+    <%- include("partials/staff-sidebar", { activePage }) %>
+    <div class="staff-main">
+      <%- include("partials/staff-topbar", { notifications }) %>
+      <main class="staff-content ticket-queue-content">
+        <h1>Ticket queue</h1>
+        <div class="ticket-queue-toolbar">
+          <form class="ticket-search" method="get" action="/staff/tickets">
+            <label class="visually-hidden" for="ticket-search">Search tickets</label>
+            <input id="ticket-search" name="q" type="search" value="<%= search %>" placeholder="Search ticket number, hospital, summary">
+            <% if (selectedStatus !== "all") { %><input type="hidden" name="status" value="<%= selectedStatus %>"><% } %>
+            <button type="submit">Search</button>
+          </form>
+          <nav class="ticket-filters" aria-label="Filter tickets by status">
+            <% const filters = [
+              { key: "all", label: "All" },
+              { key: "pending", label: "Pending" },
+              { key: "approved", label: "Approved" },
+              { key: "in_progress", label: "In Progress" },
+              { key: "waiting_for_parts", label: "Waiting for parts" },
+              { key: "resolved", label: "Resolved" }
+            ]; %>
+            <% filters.forEach((filter) => { %>
+              <a class="<%= selectedStatus === filter.key ? 'active' : '' %>" href="/staff/tickets?status=<%= filter.key %><%= search ? `&q=${encodeURIComponent(search)}` : '' %>"><%= filter.label %></a>
+            <% }); %>
+          </nav>
+        </div>
+        <div class="ticket-table-wrap">
+          <table class="ticket-table">
+            <thead>
+              <tr>
+                <th scope="col">Ticket</th>
+                <th scope="col">Details</th>
+                <th scope="col">Hospital</th>
+                <th scope="col">Priority</th>
+                <th scope="col">Status</th>
+                <th scope="col">Submitted</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% if (tickets.length > 0) { %>
+                <% tickets.forEach((ticket) => { %>
+                  <tr data-ticket-url="/staff/tickets/<%= ticket.ticket_number %>" tabindex="0" role="link" aria-label="Open Ticket <%= ticket.ticket_number %>: <%= ticket.subject %>">
+                    <td><a href="/staff/tickets/<%= ticket.ticket_number %>">Ticket-<%= ticket.ticket_number %></a></td>
+                    <td><%= ticket.subject %></td>
+                    <td><%= ticket.hospital_name %></td>
+                    <td><span class="priority-text priority-<%= ticket.priority.toLowerCase() %>"><%= ticket.priority %></span></td>
+                    <td><span class="queue-status status-<%= ticket.status %>"><%= ticketStatuses[ticket.status] %></span></td>
+                    <td><%= new Date(ticket.created_at).toLocaleString() %></td>
+                  </tr>
+                <% }); %>
+              <% } else { %>
+                <tr><td class="ticket-empty-row" colspan="6">No tickets match your search.</td></tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

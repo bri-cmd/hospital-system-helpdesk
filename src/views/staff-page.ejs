@@ -7,42 +7,9 @@
     <link rel="stylesheet" href="/css/styles.css">
   </head>
   <body class="staff-page">
-    <aside class="sidebar">
-      <a class="sidebar-brand" href="/app/dashboard">
-        <img src="/images/logo.png" alt="">
-        <span>HOSPITAL SYSTEMS HELPDESK</span>
-      </a>
-      <nav class="side-nav" aria-label="Staff navigation">
-        <% const pages = [
-          { path: "dashboard", label: "Dashboard" },
-          { path: "tickets", label: "Ticket queue" },
-          { path: "monitoring", label: "Monitoring" },
-          { path: "reports", label: "Reports" }
-        ]; %>
-        <% pages.forEach((page) => { %>
-          <a class="<%= activePage === page.path ? 'active' : '' %>" href="/app/<%= page.path %>"><%= page.label %></a>
-        <% }); %>
-      </nav>
-    </aside>
+    <%- include("partials/staff-sidebar", { activePage }) %>
     <div class="staff-main">
-      <header class="topbar">
-        <div class="topbar-spacer"></div>
-        <span class="notification-bell" role="img" aria-label="Notifications">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
-            <path d="M10 21a2 2 0 0 0 4 0" />
-          </svg>
-          <span class="notification-dot"></span>
-        </span>
-        <div class="user-summary">
-          <span class="user-avatar" aria-hidden="true"><%= currentUser.displayName.slice(0, 1).toUpperCase() %></span>
-          <span class="user-name"><%= currentUser.displayName %></span>
-          <span class="role-badge"><%= currentUser.role === "admin" ? "Admin" : "Staff" %></span>
-        </div>
-        <form class="logout-form" method="post" action="/logout">
-          <button type="submit" class="logout-button">Sign out</button>
-        </form>
-      </header>
+      <%- include("partials/staff-topbar", { notifications }) %>
       <main class="staff-content">
         <h1><%= pageLabel %></h1>
         <p class="placeholder-copy">This page will be built in a later stage.</p>

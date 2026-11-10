@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="staff-page">
+    <%- include("partials/staff-sidebar", { activePage }) %>
+    <div class="staff-main">
+      <%- include("partials/staff-topbar", { notifications }) %>
+      <main class="staff-content ticket-detail-content <%= ticket.status === 'pending' ? 'is-pending' : '' %>">
+        <div class="ticket-detail-heading">
+          <div>
+            <h1>Ticket-<%= ticket.ticket_number %> | <%= ticket.subject %></h1>
+            <p>Created <%= new Date(ticket.created_at).toLocaleString() %></p>
+          </div>
+          <% if (canApprove) { %>
+            <form method="post" action="/staff/tickets/<%= ticket.ticket_number %>/approve">
+              <button class="button button-approve" type="submit">Approve</button>
+            </form>
+          <% } %>
+        </div>
+        <% if (errorMessage) { %>
+          <p class="ticket-update-error" role="alert"><%= errorMessage %></p>
+        <% } %>
+        <div class="ticket-detail-grid">
+          <div class="ticket-detail-left">
+            <section class="staff-card ticket-information">
+              <h2>Details</h2>
+              <dl class="ticket-information-list">
+                <div><dt>Submitted By</dt><dd>Hospital employee</dd></div>
+                <div><dt>Hospital</dt><dd><%= ticket.hospital_name %></dd></div>
+                <div><dt>Problem</dt><dd class="problem-details"><%= ticket.description %></dd></div>
+              </dl>
+            </section>
+            <section class="staff-card ticket-history-card">
+              <h2>History</h2>
+              <% if (history.length > 0) { %>
+                <ol class="staff-history-list">
+                  <% history.forEach((entry) => { %>
+                    <li>
+                      <time datetime="<%= new Date(entry.created_at).toISOString() %>"><%= new Date(entry.created_at).toLocaleString() %></time>
+                      <span class="staff-history-action"><%= entry.action %></span>
+                      <p><%= entry.details || entry.action %></p>
+                      <small>by <%= entry.actor_name %></small>
+                    </li>
+                  <% }); %>
+                </ol>
+              <% } else { %>
+                <p class="empty-history">No history yet.</p>
+              <% } %>
+            </section>
+          </div>
+          <section class="staff-card ticket-update-card <%= canEdit ? '' : 'is-disabled' %>">
+            <h2>Update this ticket</h2>
+            <% if (ticket.status === "pending") { %>
+              <p class="update-locked-message">This ticket must be approved before it can be updated.</p>
+            <% } else if (ticket.status === "resolved" && currentUser.role !== "admin") { %>
+              <p class="update-locked-message">This ticket is resolved. Only Admin can reopen or edit it.</p>
+            <% } %>
+            <form method="post" action="/staff/tickets/<%= ticket.ticket_number %>/update">
+              <label for="ticket-status">Status</label>
+              <select id="ticket-status" name="status" <%= canEdit ? "" : "disabled" %>>
+                <% const availableStatuses = ticket.status === "pending" ? ["pending", ...editableTicketStatuses] : editableTicketStatuses; %>
+                <% availableStatuses.forEach((status) => { %>
+                  <option value="<%= status %>" <%= ticket.status === status ? "selected" : "" %>><%= ticketStatuses[status] %></option>
+                <% }); %>
+              </select>
+
+              <label for="assigned-to">Assigned To</label>
+              <select id="assigned-to" name="assignedTo" <%= canEdit ? "" : "disabled" %>>
+                <option value="">None</option>
+                <% staff.forEach((member) => { %>
+                  <option value="<%= member.id %>" <%= String(ticket.assigned_to || "") === String(member.id) ? "selected" : "" %>><%= member.display_name %></option>
+                <% }); %>
+              </select>
+
+              <% if (currentUser.role === "admin") { %>
+                <label for="ticket-priority">Priority</label>
+                <select id="ticket-priority" name="priority" <%= canEdit ? "" : "disabled" %>>
+                  <% ticketPriorities.forEach((priority) => { %>
+                    <option value="<%= priority %>" <%= ticket.priority === priority ? "selected" : "" %>><%= priority %></option>
+                  <% }); %>
+                </select>
+              <% } %>
+
+              <label for="ticket-note">Note</label>
+              <textarea id="ticket-note" name="note" maxlength="5000" placeholder="What was done?" <%= canEdit ? "" : "disabled" %>></textarea>
+              <label for="public-message">Public message <span class="optional-label">(optional)</span></label>
+              <textarea id="public-message" name="publicMessage" maxlength="2000" placeholder="Message visible to the employee" <%= canEdit ? "" : "disabled" %>></textarea>
+              <button class="button button-blue save-ticket-update" type="submit" <%= canEdit ? "" : "disabled" %>>Save Update</button>
+              <p class="assignment-note">Assigning a technician automatically sets status to In Progress.</p>
+            </form>
+          </section>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

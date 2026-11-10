@@ -52,6 +52,7 @@ async function migrate() {
         hospital_id BIGINT UNSIGNED NULL,
         subject VARCHAR(180) NOT NULL,
         description TEXT NOT NULL,
+        priority ENUM('Urgent', 'High', 'Medium', 'Low') NOT NULL DEFAULT 'Medium',
         status ENUM('pending', 'approved', 'in_progress', 'waiting_for_parts', 'resolved') NOT NULL DEFAULT 'pending',
         assigned_to BIGINT UNSIGNED NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -64,6 +65,15 @@ async function migrate() {
         CONSTRAINT fk_tickets_assigned_user FOREIGN KEY (assigned_to) REFERENCES users (id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+
+    const [priorityColumn] = await connection.query(
+      "SHOW COLUMNS FROM tickets WHERE Field = 'priority'"
+    );
+    if (priorityColumn.length === 0) {
+      await connection.query(
+        "ALTER TABLE tickets ADD COLUMN priority ENUM('Urgent', 'High', 'Medium', 'Low') NOT NULL DEFAULT 'Medium' AFTER description"
+      );
+    }
 
     await connection.query(`
       CREATE TABLE IF NOT EXISTS ticket_history (

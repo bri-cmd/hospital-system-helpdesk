@@ -1,0 +1,17 @@
+<aside class="sidebar">
+  <a class="sidebar-brand" href="/app/dashboard">
+    <img src="/images/logo.png" alt="">
+    <span>HOSPITAL SYSTEMS HELPDESK</span>
+  </a>
+  <nav class="side-nav" aria-label="Staff navigation">
+    <% const navigationPages = [
+      { path: "dashboard", label: "Dashboard", href: "/app/dashboard" },
+      { path: "tickets", label: "Ticket queue", href: "/staff/tickets" },
+      { path: "monitoring", label: "Monitoring", href: "/app/monitoring" },
+      { path: "reports", label: "Reports", href: "/app/reports" }
+    ]; %>
+    <% navigationPages.forEach((page) => { %>
+      <a class="<%= activePage === page.path ? 'active' : '' %>" href="<%= page.href %>"><%= page.label %></a>
+    <% }); %>
+  </nav>
+</aside>
