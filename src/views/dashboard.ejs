@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="staff-page">
+    <%- include("partials/staff-sidebar", { activePage }) %>
+    <div class="staff-main">
+      <%- include("partials/staff-topbar", { notifications }) %>
+      <main class="staff-content dashboard-content">
+        <h1>Dashboard</h1>
+        <section class="dashboard-summary" aria-label="Ticket and maintenance summary">
+          <a class="dashboard-stat-card" href="/staff/tickets?status=open">
+            <span>Open Tickets</span>
+            <strong><%= openTickets %></strong>
+          </a>
+          <a class="dashboard-stat-card dashboard-approval-card" href="/staff/tickets?status=pending">
+            <span>For Approval</span>
+            <strong><%= pendingTickets %></strong>
+          </a>
+          <div class="dashboard-stat-card dashboard-expiring-card">
+            <span>PMS expiring soon</span>
+            <strong><%= pmsExpiringSoon %></strong>
+          </div>
+          <div class="dashboard-stat-card dashboard-overdue-card">
+            <span>PMS overdue</span>
+            <strong><%= pmsOverdue %></strong>
+          </div>
+        </section>
+        <section class="dashboard-panels">
+          <article class="dashboard-panel recent-tickets-panel">
+            <div class="dashboard-panel-heading">
+              <h2>Recent tickets</h2>
+              <a href="/staff/tickets">View queue</a>
+            </div>
+            <% if (recentTickets.length > 0) { %>
+              <ul class="dashboard-ticket-list">
+                <% recentTickets.forEach((ticket) => { %>
+                  <li>
+                    <a class="dashboard-ticket-link" href="/staff/tickets/<%= ticket.ticket_number %>">
+                      <span class="dashboard-ticket-main">
+                        <strong>Ticket-<%= ticket.ticket_number %> | <%= ticket.subject %></strong>
+                        <span><%= ticket.hospital_name %></span>
+                      </span>
+                      <span class="queue-status status-<%= ticket.status %>"><%= ticketStatuses[ticket.status] %></span>
+                    </a>
+                  </li>
+                <% }); %>
+              </ul>
+            <% } else { %>
+              <p class="dashboard-empty-state">No tickets yet.</p>
+            <% } %>
+          </article>
+          <article class="dashboard-panel dashboard-pms-panel">
+            <div class="dashboard-panel-heading">
+              <h2>PMS Monitoring</h2>
+              <a href="/staff/monitoring">View monitoring</a>
+            </div>
+            <div class="dashboard-pms-sections">
+              <section>
+                <h3>PMS Overdue</h3>
+                <p>No PMS data yet</p>
+              </section>
+              <section>
+                <h3>PMS Expiring Soon</h3>
+                <p>No PMS data yet</p>
+              </section>
+            </div>
+          </article>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

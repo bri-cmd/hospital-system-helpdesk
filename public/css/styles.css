@@ -1148,6 +1148,247 @@ a {
   }
 }
 
+.dashboard-content > h1 {
+  margin-bottom: 42px;
+}
+
+.dashboard-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0 0 44px;
+}
+
+.dashboard-stat-card {
+  display: flex;
+  min-height: 114px;
+  flex-direction: column;
+  gap: 11px;
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  padding: 14px;
+  color: #141414;
+  background: #fff;
+  box-shadow: 0 3px 4px rgba(20, 32, 48, 0.22);
+  text-decoration: none;
+}
+
+a.dashboard-stat-card:hover {
+  border-color: #b7c8e2;
+  background: #fbfcfe;
+}
+
+.dashboard-stat-card > span {
+  font-size: 14px;
+}
+
+.dashboard-stat-card > strong {
+  color: #080808;
+  font-size: 40px;
+  line-height: 1;
+}
+
+.dashboard-approval-card > strong {
+  color: #f00000;
+}
+
+.dashboard-expiring-card > strong {
+  color: #ff8726;
+}
+
+.dashboard-overdue-card > strong {
+  color: #f00000;
+}
+
+.dashboard-panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.dashboard-panel {
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.dashboard-panel-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid #dbe3ef;
+  padding: 0 0 8px;
+}
+
+.dashboard-panel-heading h2 {
+  margin: 0;
+  color: #17233c;
+  font-size: 16px;
+}
+
+.dashboard-panel-heading a {
+  color: #2455ad;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.dashboard-panel-heading a:hover {
+  text-decoration: underline;
+}
+
+.dashboard-ticket-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dashboard-ticket-list li {
+  border-bottom: 1px solid #dbe3ef;
+}
+
+.dashboard-ticket-list li:last-child {
+  border-bottom: 0;
+}
+
+.dashboard-ticket-link {
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 0;
+  color: #17233c;
+  text-decoration: none;
+}
+
+.dashboard-ticket-link:hover .dashboard-ticket-main strong {
+  color: #2455ad;
+  text-decoration: underline;
+}
+
+.dashboard-ticket-main {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.dashboard-ticket-main strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-ticket-main > span {
+  overflow: hidden;
+  color: #53627a;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-ticket-link .queue-status {
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: #e8edf5;
+}
+
+.dashboard-ticket-link .status-pending {
+  color: #ec7c00;
+  background: #fff0e3;
+}
+
+.dashboard-ticket-link .status-approved,
+.dashboard-ticket-link .status-resolved {
+  color: #11863e;
+  background: #e5f5eb;
+}
+
+.dashboard-ticket-link .status-in_progress {
+  color: #d56f00;
+  background: #fff1df;
+}
+
+.dashboard-ticket-link .status-waiting_for_parts {
+  color: #8c6000;
+  background: #fff4d8;
+}
+
+.dashboard-empty-state,
+.dashboard-pms-message,
+.dashboard-pms-sections p {
+  margin: 16px 0 0;
+  color: #53627a;
+  font-size: 14px;
+}
+
+.dashboard-pms-sections {
+  display: grid;
+}
+
+.dashboard-pms-sections section {
+  padding: 14px 0;
+}
+
+.dashboard-pms-sections section + section {
+  border-top: 1px solid #dbe3ef;
+}
+
+.dashboard-pms-sections h3 {
+  margin: 0;
+  color: #17233c;
+  font-size: 14px;
+}
+
+.dashboard-pms-sections p {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+@media (max-width: 1000px) {
+  .dashboard-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .dashboard-content > h1 {
+    margin-bottom: 24px;
+  }
+
+  .dashboard-summary {
+    gap: 10px;
+    margin-bottom: 28px;
+  }
+
+  .dashboard-stat-card {
+    min-height: 98px;
+    padding: 12px;
+  }
+
+  .dashboard-stat-card > span {
+    font-size: 12px;
+  }
+
+  .dashboard-stat-card > strong {
+    font-size: 34px;
+  }
+
+  .dashboard-panels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dashboard-panel {
+    padding: 16px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

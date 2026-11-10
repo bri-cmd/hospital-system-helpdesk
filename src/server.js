@@ -172,7 +172,7 @@ app.get("/", (req, res) => {
 
 app.get("/login", (req, res) => {
   if (req.session.user) {
-    return res.redirect("/app/dashboard");
+    return res.redirect("/staff/dashboard");
   }
   res.render("login", { title: "Staff Sign In", error: null });
 });
@@ -210,7 +210,7 @@ app.post("/login", async (req, res, next) => {
         if (saveError) {
           return next(saveError);
         }
-        res.redirect("/app/dashboard");
+        res.redirect("/staff/dashboard");
       });
     });
   } catch (error) {
@@ -229,10 +229,60 @@ app.post("/logout", requireLogin, (req, res, next) => {
 });
 
 const staffPages = [
-  { path: "dashboard", label: "Dashboard" },
   { path: "monitoring", label: "Monitoring" },
   { path: "reports", label: "Reports" }
 ];
+
+app.get("/app/dashboard", requireLogin, (req, res) => {
+  res.redirect("/staff/dashboard");
+});
+
+app.get("/staff/dashboard", requireLogin, async (req, res, next) => {
+  const isStaff = req.session.user.role === "staff";
+  const ticketScope = isStaff ? "WHERE assigned_to = ?" : "";
+  const ticketParams = isStaff ? [req.session.user.id] : [];
+  const openScope = isStaff
+    ? "WHERE assigned_to = ? AND status <> 'resolved'"
+    : "WHERE status <> 'resolved'";
+  const pendingScope = isStaff
+    ? "WHERE assigned_to = ? AND status = 'pending'"
+    : "WHERE status = 'pending'";
+
+  try {
+    const [[{ openTickets }]] = await pool.execute(
+      `SELECT COUNT(*) AS openTickets FROM tickets ${openScope}`,
+      isStaff ? [req.session.user.id] : []
+    );
+    const [[{ pendingTickets }]] = await pool.execute(
+      `SELECT COUNT(*) AS pendingTickets FROM tickets ${pendingScope}`,
+      isStaff ? [req.session.user.id] : []
+    );
+    const [recentTickets] = await pool.execute(
+      `SELECT t.ticket_number, t.subject, t.status, t.created_at, h.name AS hospital_name
+       FROM tickets t
+       JOIN hospitals h ON h.id = t.hospital_id
+       ${ticketScope}
+       ORDER BY t.created_at DESC, t.id DESC
+       LIMIT 5`,
+      ticketParams
+    );
+    const notifications = await getNotifications(req.session.user);
+
+    res.render("dashboard", {
+      title: "Dashboard",
+      activePage: "dashboard",
+      notifications,
+      openTickets: Number(openTickets),
+      pendingTickets: Number(pendingTickets),
+      pmsExpiringSoon: 0,
+      pmsOverdue: 0,
+      recentTickets,
+      ticketStatuses
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 for (const page of staffPages) {
   app.get(`/app/${page.path}`, requireLogin, async (req, res, next) => {
@@ -257,13 +307,15 @@ app.get("/app/tickets", requireLogin, (req, res) => {
 app.get("/staff/tickets", requireLogin, async (req, res, next) => {
   const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
   const requestedStatus = typeof req.query.status === "string" ? req.query.status : "all";
-  const selectedStatus = ["all", ...Object.keys(ticketStatuses)].includes(requestedStatus)
+  const selectedStatus = ["all", "open", ...Object.keys(ticketStatuses)].includes(requestedStatus)
     ? requestedStatus
     : "all";
   const conditions = [];
   const params = [];
 
-  if (selectedStatus !== "all") {
+  if (selectedStatus === "open") {
+    conditions.push("t.status <> 'resolved'");
+  } else if (selectedStatus !== "all") {
     conditions.push("t.status = ?");
     params.push(selectedStatus);
   }
