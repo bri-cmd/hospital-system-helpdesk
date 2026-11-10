@@ -24,6 +24,37 @@ const hospitals = [
   ["MACTAN-MEDICAL", "Mactan Medical"]
 ];
 
+// Sample PMS data for Gatchalian Medical Center and three other hospitals.
+const samplePmsItems = [
+  ["Gatchalian Medical Center", "Air Treatment", "Pre-Filter", "Filter, Element - E0620X5", "1 PC/S", 6, "2026-05-18", "2026-11-18"],
+  ["Gatchalian Medical Center", "Air Treatment", "Dust Filter", "FILTER ELEMENT E0620X1", "1 PC/S", 6, "2026-05-18", "2026-11-18"],
+  ["Gatchalian Medical Center", "Air Treatment", "Oil Filter", "FILTER ELEMENT E0620XA", "1 PC/S", 6, "2026-05-18", "2026-11-18"],
+  ["Gatchalian Medical Center", "Air Treatment", "Particle Filter", "Filter, Element - E0620RXA", "1 PC/S", 6, "2026-05-18", "2026-11-18"],
+  ["Gatchalian Medical Center", "Air Treatment", "Bacterial Filter", "Filter, Element OG-M100Y", "1 PC/S", 24, null, null],
+  ["Gatchalian Medical Center", "Air Treatment", "Sterile Filter", "Filter Element - OG-M100YSR", "1 PC/S", 24, null, null],
+  ["Gatchalian Medical Center", "Air Treatment", "Carbon Tower", "ACTIVATED CARBON", "3 BAG", 60, null, null],
+  ["Gatchalian Medical Center", "Compressor #1 - COMP AIR-L18-75A", "Air Filter", "Air Filter - 100001611", "1 PC/S", 6, "2026-05-27", "2026-11-27"],
+  ["Gatchalian Medical Center", "Compressor #1 - COMP AIR-L18-75A", "Oil Filter", "Oil Filter - A04819974", "1 PC/S", 6, "2026-05-27", "2026-11-27"],
+  ["Gatchalian Medical Center", "Compressor #1 - COMP AIR-L18-75A", "Air-Oil Separator", "Air-Oil Separator - A10525274", "1 PC/S", 12, "2026-05-27", "2027-05-27"],
+  ["Gatchalian Medical Center", "Compressor #1 - COMP AIR-L18-75A", "Oil Change", "Compressor Oil - ORELUBE", "1 PAIL", 6, "2026-05-27", "2026-11-27"],
+  ["Gatchalian Medical Center", "Compressor #1 - COMP AIR-L18-75A", "V-Belt", "V-Belt", "3 PC/S", 12, null, null],
+  ["Gatchalian Medical Center", "Compressor #2", "Air Filter", "Air Filter - 100001611", "1 PC/S", 6, "2026-05-18", "2026-11-18"],
+  ["Gatchalian Medical Center", "Compressor #2", "Oil Filter", "Oil Filter - A04819974", "1 PC/S", 6, "2026-05-18", "2026-11-18"],
+  ["Gatchalian Medical Center", "Compressor #2", "Air-Oil Separator", "Air-Oil Separator - A10525274", "1 PC/S", 12, "2026-05-18", "2027-05-18"],
+  ["Gatchalian Medical Center", "Compressor #2", "Oil Change", "Compressor Oil - ORELUBE", "1 PAIL", 6, "2026-05-18", "2026-11-18"],
+  ["Gatchalian Medical Center", "Compressor #2", "V-Belt", "V-Belt", "3 PC/S", 12, null, null],
+  ["Gatchalian Medical Center", "Calibration & Other", "Pressure Gauge (Calibration)", "0-400 psi (O2 Receiver)", "1 PC/S", 12, "2025-06-03", "2026-06-03"],
+  ["Gatchalian Medical Center", "Calibration & Other", "Pressure Gauge (Calibration)", "0-400 psi (Air receiver)", "1 PC/S", 12, "2025-06-03", "2026-06-03"],
+  ["Gatchalian Medical Center", "Calibration & Other", "Pressure Gauge (Calibration)", "0-400 psi (Manifold)", "1 PC/S", 12, "2025-05-08", "2026-05-08"],
+  ["Gatchalian Medical Center", "Calibration & Other", "Pressure Gauge (Calibration)", "0-4000psi (Calibrated)", "2 PC/S", 12, null, null],
+  ["Gatchalian Medical Center", "Calibration & Other", "O2 Purity Analyzer (Cell)", "Grfy / Southland", "1 PC/S", 12, null, null],
+  ["Gatchalian Medical Center", "Calibration & Other", "Handheld Analyzer (Calibration)", "All / Southland", "1 PC/S", 12, "2025-05-08", "2026-05-08"],
+  ["Gatchalian Medical Center", "Calibration & Other", "Room Temperature (Calibration)", "DIGITAL", "1 PC/S", 12, "2025-04-24", "2026-04-24"],
+  ["RTR", "Air Treatment", "Oil Filter", "Air plant oil filter", "1 PC/S", 6, "2026-05-20", "2026-11-20"],
+  ["SUMC", "Calibration & Other", "Pressure Gauge (Calibration)", "Plant pressure gauge", "1 PC/S", 12, "2025-10-30", "2026-10-30"],
+  ["Mactan Medical", "Air Treatment", "Bacterial Filter", "Air treatment bacterial filter", "1 PC/S", 24, "2025-03-01", "2027-03-01"]
+];
+
 const sampleTickets = [
   {
     number: "740201",
@@ -141,6 +172,39 @@ async function seed() {
            ON DUPLICATE KEY UPDATE name = VALUES(name)`,
           [code, name]
         );
+      }
+
+      for (const [
+        hospitalName,
+        groupName,
+        item,
+        partNumber,
+        qty,
+        frequencyMonths,
+        lastDone,
+        nextPms
+      ] of samplePmsItems) {
+        const [[hospital]] = await connection.execute(
+          "SELECT id FROM hospitals WHERE name = ? LIMIT 1",
+          [hospitalName]
+        );
+        if (!hospital) {
+          throw new Error(`Sample PMS hospital not found: ${hospitalName}`);
+        }
+        const [existing] = await connection.execute(
+          `SELECT id FROM pms_items
+           WHERE hospital_id = ? AND group_name = ? AND item = ? AND part_number = ?
+           LIMIT 1`,
+          [hospital.id, groupName, item, partNumber]
+        );
+        if (existing.length === 0) {
+          await connection.execute(
+            `INSERT INTO pms_items
+               (hospital_id, group_name, item, part_number, qty, frequency_months, last_done, next_pms)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [hospital.id, groupName, item, partNumber, qty, frequencyMonths, lastDone, nextPms]
+          );
+        }
       }
 
       const [[staffUser]] = await connection.execute(

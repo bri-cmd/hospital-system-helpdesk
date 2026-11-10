@@ -46,6 +46,43 @@ async function migrate() {
     `);
 
     await connection.query(`
+      CREATE TABLE IF NOT EXISTS pms_items (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        hospital_id BIGINT UNSIGNED NOT NULL,
+        group_name VARCHAR(160) NOT NULL,
+        item VARCHAR(180) NOT NULL,
+        part_number VARCHAR(180) NULL,
+        qty VARCHAR(40) NOT NULL,
+        frequency_months SMALLINT UNSIGNED NOT NULL,
+        last_done DATE NULL,
+        next_pms DATE NULL,
+        notes TEXT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY ix_pms_items_hospital_id (hospital_id),
+        KEY ix_pms_items_next_pms (next_pms),
+        CONSTRAINT fk_pms_items_hospital FOREIGN KEY (hospital_id) REFERENCES hospitals (id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS pms_item_history (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        pms_item_id BIGINT UNSIGNED NOT NULL,
+        actor_user_id BIGINT UNSIGNED NULL,
+        actor_name VARCHAR(120) NOT NULL,
+        old_values JSON NOT NULL,
+        new_values JSON NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY ix_pms_item_history_item_created (pms_item_id, created_at),
+        CONSTRAINT fk_pms_history_item FOREIGN KEY (pms_item_id) REFERENCES pms_items (id) ON DELETE CASCADE,
+        CONSTRAINT fk_pms_history_actor FOREIGN KEY (actor_user_id) REFERENCES users (id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await connection.query(`
       CREATE TABLE IF NOT EXISTS tickets (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
         ticket_number VARCHAR(40) NOT NULL,

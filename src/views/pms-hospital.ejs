@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="staff-page">
+    <%- include("partials/staff-sidebar", { activePage }) %>
+    <div class="staff-main">
+      <%- include("partials/staff-topbar", { notifications }) %>
+      <main class="staff-content pms-hospital-content">
+        <a class="pms-back-link" href="/staff/monitoring">← All hospitals</a>
+        <div class="pms-page-heading pms-hospital-heading">
+          <div>
+            <h1><%= hospital.name %></h1>
+            <p><%= total %> PMS items · <%= onSchedule %>% on schedule · as of <%= today %></p>
+          </div>
+        </div>
+        <% if (errorMessage) { %>
+          <p class="pms-error-message" role="alert"><%= errorMessage %></p>
+        <% } %>
+        <section class="pms-summary-cards" aria-label="PMS item counts for this hospital">
+          <article class="pms-summary-card pms-preparing"><span>Preparing</span><strong><%= counts.preparing %></strong></article>
+          <article class="pms-summary-card pms-expiring"><span>Expiring soon</span><strong><%= counts.expiring_soon %></strong></article>
+          <article class="pms-summary-card pms-overdue"><span>Overdue</span><strong><%= counts.overdue %></strong></article>
+          <article class="pms-summary-card pms-for-update"><span>For update</span><strong><%= counts.for_update %></strong></article>
+        </section>
+        <section class="pms-panel pms-schedule-panel">
+          <div class="pms-schedule-toolbar">
+            <h2>PMS schedule</h2>
+            <nav class="pms-filters" aria-label="Filter PMS items">
+              <% const filters = [
+                ["all", "All"],
+                ["preparing", "Preparing"],
+                ["expiring_soon", "Expiring soon"],
+                ["overdue", "Overdue"],
+                ["for_update", "For update"]
+              ]; %>
+              <% filters.forEach(([key, label]) => { %>
+                <a class="<%= filter === key ? 'active' : '' %>" href="/staff/monitoring/<%= hospital.id %>?status=<%= key %><%= search ? `&q=${encodeURIComponent(search)}` : '' %>"><%= label %></a>
+              <% }); %>
+              <form class="pms-search-form" method="get" action="/staff/monitoring/<%= hospital.id %>">
+                <% if (filter !== "all") { %><input type="hidden" name="status" value="<%= filter %>"><% } %>
+                <label class="visually-hidden" for="pms-item-search">Search PMS items</label>
+                <input id="pms-item-search" name="q" type="search" value="<%= search %>" placeholder="Search item...">
+                <button type="submit">Search</button>
+              </form>
+            </nav>
+          </div>
+          <div class="pms-schedule-table-wrap">
+            <table class="pms-schedule-table">
+              <thead>
+                <tr>
+                  <th scope="col">Item</th>
+                  <th scope="col">Part number</th>
+                  <th scope="col">Qty</th>
+                  <th scope="col">Frequency</th>
+                  <th scope="col">Last done</th>
+                  <th scope="col">Next PMS</th>
+                  <th scope="col">Days left</th>
+                  <th scope="col">Status</th>
+                  <% if (canEdit) { %><th scope="col">Edit</th><% } %>
+                </tr>
+              </thead>
+              <tbody>
+                <% if (groups.length) { %>
+                  <% groups.forEach((group) => { %>
+                    <tr class="pms-group-row"><th scope="rowgroup" colspan="<%= canEdit ? 9 : 8 %>"><%= group.name %></th></tr>
+                    <% group.items.forEach((item) => { %>
+                      <tr>
+                        <td><%= item.item %><% if (item.notes) { %><small class="pms-item-note"><%= item.notes %></small><% } %></td>
+                        <td><%= item.part_number || "—" %></td>
+                        <td><%= item.qty %></td>
+                        <td>Every <%= item.frequency_months %> mo</td>
+                        <td><%= formatDate(item.last_done) %></td>
+                        <td><%= formatDate(item.next_pms) %></td>
+                        <td class="<%= item.status === 'overdue' ? 'pms-days-overdue' : '' %>">
+                          <% if (item.days_left === null) { %>—<% } else if (item.days_left < 0) { %><%= Math.abs(item.days_left) %> days overdue<% } else if (item.days_left === 0) { %>Due today<% } else { %><%= item.days_left %> days<% } %>
+                        </td>
+                        <td><span class="pms-status-badge badge-<%= item.status %>"><%= pmsStatuses[item.status] %></span></td>
+                        <% if (canEdit) { %>
+                          <td>
+                            <details class="pms-item-edit">
+                              <summary>Edit</summary>
+                              <form method="post" action="/staff/monitoring/<%= hospital.id %>/items/<%= item.id %>">
+                                <label for="last-done-<%= item.id %>">Last done</label>
+                                <input id="last-done-<%= item.id %>" type="date" name="last_done" value="<%= item.last_done || '' %>">
+                                <label for="next-pms-<%= item.id %>">Next PMS</label>
+                                <input id="next-pms-<%= item.id %>" type="date" name="next_pms" value="<%= item.next_pms || '' %>">
+                                <label for="pms-notes-<%= item.id %>">Notes</label>
+                                <textarea id="pms-notes-<%= item.id %>" name="notes" maxlength="5000"><%= item.notes || '' %></textarea>
+                                <button class="button button-blue" type="submit">Save</button>
+                                <small>Changing Last done recalculates Next PMS using the item frequency.</small>
+                              </form>
+                            </details>
+                          </td>
+                        <% } %>
+                      </tr>
+                      <% if (item.history.length > 0) { %>
+                        <tr class="pms-audit-row">
+                          <td colspan="<%= canEdit ? 9 : 8 %>">
+                            <details>
+                              <summary>Change history (<%= item.history.length %>)</summary>
+                              <ul>
+                                <% item.history.forEach((entry) => { %>
+                                  <li><time datetime="<%= new Date(entry.created_at).toISOString() %>"><%= new Date(entry.created_at).toLocaleString() %></time> · <%= entry.actor_name %> · <%= JSON.stringify(entry.old_values) %> → <%= JSON.stringify(entry.new_values) %></li>
+                                <% }); %>
+                              </ul>
+                            </details>
+                          </td>
+                        </tr>
+                      <% } %>
+                    <% }); %>
+                  <% }); %>
+                <% } else { %>
+                  <tr><td class="pms-empty-row" colspan="<%= canEdit ? 9 : 8 %>">No PMS items match this filter.</td></tr>
+                <% } %>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

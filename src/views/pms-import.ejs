@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="staff-page">
+    <%- include("partials/staff-sidebar", { activePage }) %>
+    <div class="staff-main">
+      <%- include("partials/staff-topbar", { notifications }) %>
+      <main class="staff-content pms-import-content">
+        <a class="pms-back-link" href="/staff/monitoring">← PMS Monitoring</a>
+        <h1>Import PMS Data</h1>
+        <p class="pms-import-intro">Upload a CSV file to preview PMS rows before importing them.</p>
+        <% if (errors.length > 0) { %>
+          <div class="ticket-form-errors <%= errors[0].startsWith('Imported ') ? 'pms-import-success' : '' %>" role="<%= errors[0].startsWith('Imported ') ? 'status' : 'alert' %>">
+            <ul>
+              <% errors.forEach((error) => { %><li><%= error %></li><% }); %>
+            </ul>
+          </div>
+        <% } %>
+        <section class="pms-panel pms-upload-panel">
+          <h2>Upload CSV</h2>
+          <p>Required columns: <code>hospital, group, item, part_number, qty, frequency_months, last_done, next_pms</code>. Dates use YYYY-MM-DD. Leave dates blank when not available.</p>
+          <a class="pms-template-link" href="/staff/monitoring/import/template.csv">Download CSV template</a>
+          <form method="post" action="/staff/monitoring/import/preview" enctype="multipart/form-data">
+            <label for="pms-csv-file">CSV file</label>
+            <input id="pms-csv-file" type="file" name="csvFile" accept=".csv,text/csv" required>
+            <button class="button button-blue" type="submit">Preview import</button>
+          </form>
+        </section>
+        <% if (previewRows.length > 0) { %>
+          <section class="pms-panel pms-import-preview">
+            <div class="pms-import-preview-heading">
+              <h2>Preview</h2>
+              <strong><%= previewCount %> row(s) to add</strong>
+            </div>
+            <div class="pms-schedule-table-wrap">
+              <table class="pms-schedule-table">
+                <thead>
+                  <tr><th>Hospital</th><th>Group</th><th>Item</th><th>Part number</th><th>Qty</th><th>Frequency</th><th>Last done</th><th>Next PMS</th></tr>
+                </thead>
+                <tbody>
+                  <% previewRows.forEach((row) => { %>
+                    <tr>
+                      <td><%= row.hospital %></td><td><%= row.group_name %></td><td><%= row.item %></td>
+                      <td><%= row.part_number || "—" %></td><td><%= row.qty %></td>
+                      <td>Every <%= row.frequency_months %> mo</td><td><%= row.last_done || "—" %></td><td><%= row.next_pms || "—" %></td>
+                    </tr>
+                  <% }); %>
+                </tbody>
+              </table>
+            </div>
+            <form class="pms-import-confirm-form" method="post" action="/staff/monitoring/import/confirm">
+              <button class="button button-blue" type="submit">Confirm import of <%= previewCount %> row(s)</button>
+            </form>
+          </section>
+        <% } %>
+      </main>
+    </div>
+  </body>
+</html>

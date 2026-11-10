@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="staff-page">
+    <%- include("partials/staff-sidebar", { activePage }) %>
+    <div class="staff-main">
+      <%- include("partials/staff-topbar", { notifications }) %>
+      <main class="staff-content pms-overview-content">
+        <div class="pms-page-heading">
+          <div>
+            <h1>PMS Monitoring</h1>
+            <p>Preventive maintenance across <%= hospitalCount %> hospitals - <%= itemCount %> items - as of <%= today %></p>
+          </div>
+          <% if (currentUser.role === "admin") { %>
+            <a class="button button-blue pms-import-link" href="/staff/monitoring/import">Import PMS data</a>
+          <% } %>
+        </div>
+        <section class="pms-summary-cards" aria-label="PMS item counts">
+          <article class="pms-summary-card pms-preparing">
+            <span>Preparing</span>
+            <strong><%= counts.preparing %></strong>
+          </article>
+          <article class="pms-summary-card pms-expiring">
+            <span>Expiring soon</span>
+            <strong><%= counts.expiring_soon %></strong>
+          </article>
+          <article class="pms-summary-card pms-overdue">
+            <span>Overdue</span>
+            <strong><%= counts.overdue %></strong>
+          </article>
+          <article class="pms-summary-card pms-for-update">
+            <span>For update</span>
+            <strong><%= counts.for_update %></strong>
+          </article>
+        </section>
+        <div class="pms-overview-grid">
+          <section class="pms-panel pms-hospitals-panel">
+            <h2>Hospitals</h2>
+            <div class="pms-hospital-table-wrap">
+              <table class="pms-hospital-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Hospital</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Overdue</th>
+                    <th scope="col">Expiring</th>
+                    <th scope="col">For update</th>
+                    <th scope="col">On schedule</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <% hospitals.forEach((hospital) => { %>
+                    <% const denominator = hospital.total || 1; %>
+                    <tr>
+                      <td><a href="/staff/monitoring/<%= hospital.id %>"><%= hospital.name %></a></td>
+                      <td>
+                        <div class="pms-status-bar" role="img" aria-label="<%= hospital.counts.overdue %> overdue, <%= hospital.counts.expiring_soon %> expiring soon, <%= hospital.counts.for_update %> for update, <%= hospital.counts.preparing %> preparing">
+                          <span class="bar-overdue" style="width:<%= hospital.counts.overdue / denominator * 100 %>%"></span>
+                          <span class="bar-expiring" style="width:<%= hospital.counts.expiring_soon / denominator * 100 %>%"></span>
+                          <span class="bar-update" style="width:<%= hospital.counts.for_update / denominator * 100 %>%"></span>
+                          <span class="bar-preparing" style="width:<%= hospital.counts.preparing / denominator * 100 %>%"></span>
+                        </div>
+                      </td>
+                      <td><%= hospital.counts.overdue %></td>
+                      <td><%= hospital.counts.expiring_soon %></td>
+                      <td><%= hospital.counts.for_update %></td>
+                      <td><%= hospital.on_schedule %>%</td>
+                    </tr>
+                  <% }); %>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <aside class="pms-overview-side">
+            <section class="pms-panel pms-urgent-panel">
+              <h2>PMS Overdue</h2>
+              <% if (overdueHospitals.length) { %>
+                <ul class="pms-urgent-list">
+                  <% overdueHospitals.forEach((hospital) => { %>
+                    <li>
+                      <a href="/staff/monitoring/<%= hospital.hospital_id %>">
+                        <strong><%= hospital.hospital_name %></strong>
+                        <span><%= hospital.item_count %> items · <%= hospital.group_name %></span>
+                      </a>
+                      <span class="pms-date-badge badge-overdue">Overdue <%= Math.abs(hospital.days_left) %> days</span>
+                    </li>
+                  <% }); %>
+                </ul>
+              <% } else { %>
+                <p class="pms-no-items">No overdue PMS items.</p>
+              <% } %>
+            </section>
+            <section class="pms-panel pms-urgent-panel">
+              <h2>PMS Expiring Soon</h2>
+              <% if (expiringHospitals.length) { %>
+                <ul class="pms-urgent-list">
+                  <% expiringHospitals.forEach((hospital) => { %>
+                    <li>
+                      <a href="/staff/monitoring/<%= hospital.hospital_id %>">
+                        <strong><%= hospital.hospital_name %></strong>
+                        <span><%= hospital.item_count %> items · <%= hospital.group_name %></span>
+                      </a>
+                      <span class="pms-date-badge badge-expiring"><%= hospital.days_left === 0 ? "Due today" : `Due in ${hospital.days_left} days` %></span>
+                    </li>
+                  <% }); %>
+                </ul>
+              <% } else { %>
+                <p class="pms-no-items">No PMS items expiring soon.</p>
+              <% } %>
+            </section>
+          </aside>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

@@ -5,9 +5,11 @@ const express = require("express");
 const session = require("express-session");
 const helmet = require("helmet");
 const { rateLimit } = require("express-rate-limit");
+const multer = require("multer");
 const path = require("path");
 const { createPool } = require("./db");
 const { randomInt } = require("crypto");
+const { parse: parseCsv } = require("csv-parse/sync");
 
 if (!process.env.SESSION_SECRET) {
   throw new Error("Missing required environment variable: SESSION_SECRET");
@@ -78,6 +80,324 @@ const ticketStatuses = {
 };
 const editableTicketStatuses = ["approved", "in_progress", "waiting_for_parts", "resolved"];
 const ticketPriorities = ["Urgent", "High", "Medium", "Low"];
+const pmsStatuses = {
+  preparing: "Preparing",
+  expiring_soon: "Expiring soon",
+  overdue: "Overdue",
+  for_update: "For update"
+};
+const pmsStatusOrder = ["preparing", "expiring_soon", "overdue", "for_update"];
+const pmsCsvHeaders = [
+  "hospital",
+  "group",
+  "item",
+  "part_number",
+  "qty",
+  "frequency_months",
+  "last_done",
+  "next_pms"
+];
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 }
+});
+
+function getTodayDate() {
+  const today = new Date();
+  return [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, "0"),
+    String(today.getDate()).padStart(2, "0")
+  ].join("-");
+}
+
+function dateOnly(value) {
+  if (!value) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return [
+      value.getFullYear(),
+      String(value.getMonth() + 1).padStart(2, "0"),
+      String(value.getDate()).padStart(2, "0")
+    ].join("-");
+  }
+  return String(value).slice(0, 10);
+}
+
+function daysFromToday(date, today = getTodayDate()) {
+  if (!date) {
+    return null;
+  }
+  const dateUtc = Date.parse(`${date}T00:00:00Z`);
+  const todayUtc = Date.parse(`${today}T00:00:00Z`);
+  return Math.round((dateUtc - todayUtc) / 86400000);
+}
+
+function getPmsItemStatus(nextPms, today = getTodayDate()) {
+  if (!nextPms) {
+    return "for_update";
+  }
+  const days = daysFromToday(nextPms, today);
+  if (days < 0) {
+    return "overdue";
+  }
+  if (days <= 30) {
+    return "expiring_soon";
+  }
+  return "preparing";
+}
+
+function formatPmsDate(value) {
+  if (!value) {
+    return "—";
+  }
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+}
+
+function isValidDateOnly(value) {
+  if (!value) {
+    return true;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
+}
+
+function addMonthsToDate(date, months) {
+  const [year, month, day] = date.split("-").map(Number);
+  const targetMonthIndex = month - 1 + months;
+  const targetYear = year + Math.floor(targetMonthIndex / 12);
+  const normalizedMonth = ((targetMonthIndex % 12) + 12) % 12;
+  const lastDay = new Date(Date.UTC(targetYear, normalizedMonth + 1, 0)).getUTCDate();
+  const targetDay = Math.min(day, lastDay);
+  return [
+    targetYear,
+    String(normalizedMonth + 1).padStart(2, "0"),
+    String(targetDay).padStart(2, "0")
+  ].join("-");
+}
+
+async function getPmsOverview() {
+  const today = getTodayDate();
+  const [[hospitals], [rows]] = await Promise.all([
+    pool.execute("SELECT id, name FROM hospitals ORDER BY name"),
+    pool.execute(
+      `SELECT p.id, p.hospital_id, p.group_name, p.item, p.part_number, p.qty,
+              p.frequency_months, p.last_done, p.next_pms, p.notes, h.name AS hospital_name
+       FROM pms_items p
+       JOIN hospitals h ON h.id = p.hospital_id
+       ORDER BY h.name, p.group_name, p.item`
+    )
+  ]);
+  const counts = { preparing: 0, expiring_soon: 0, overdue: 0, for_update: 0 };
+  const perHospital = new Map(
+    hospitals.map((hospital) => [
+      String(hospital.id),
+      { ...hospital, counts: { preparing: 0, expiring_soon: 0, overdue: 0, for_update: 0 }, total: 0, items: [] }
+    ])
+  );
+  const items = rows.map((row) => {
+    const nextPms = dateOnly(row.next_pms);
+    const lastDone = dateOnly(row.last_done);
+    const daysLeft = daysFromToday(nextPms, today);
+    const status = getPmsItemStatus(nextPms, today);
+    counts[status] += 1;
+    const item = { ...row, next_pms: nextPms, last_done: lastDone, days_left: daysLeft, status };
+    const hospital = perHospital.get(String(row.hospital_id));
+    hospital.counts[status] += 1;
+    hospital.total += 1;
+    hospital.items.push(item);
+    return item;
+  });
+  const hospitalRows = [...perHospital.values()].map((hospital) => ({
+    ...hospital,
+    on_schedule: hospital.total ? Math.round((hospital.counts.preparing / hospital.total) * 100) : 0
+  }));
+  const urgentHospitals = (status) => {
+    const result = [];
+    for (const hospital of hospitalRows) {
+      const matching = hospital.items
+        .filter((item) => item.status === status)
+        .sort((left, right) => left.days_left - right.days_left);
+      if (matching.length > 0) {
+        const urgentItem = matching[0];
+        result.push({
+          hospital_id: hospital.id,
+          hospital_name: hospital.name,
+          item_count: matching.length,
+          group_name: urgentItem.group_name,
+          days_left: urgentItem.days_left
+        });
+      }
+    }
+    return result.sort((left, right) =>
+      status === "overdue"
+        ? left.days_left - right.days_left
+        : left.days_left - right.days_left
+    );
+  };
+
+  return {
+    today,
+    hospitals: hospitalRows.sort((left, right) =>
+      right.counts.overdue - left.counts.overdue || left.name.localeCompare(right.name)
+    ),
+    items,
+    counts,
+    overdueHospitals: urgentHospitals("overdue"),
+    expiringHospitals: urgentHospitals("expiring_soon")
+  };
+}
+
+function requireAdmin(req, res, next) {
+  if (req.session.user.role !== "admin") {
+    return res.status(403).render("error", { title: "Access denied" });
+  }
+  next();
+}
+
+function renderPmsImport(res, options = {}) {
+  return res.status(options.statusCode || 200).render("pms-import", {
+    title: "Import PMS Data",
+    activePage: "monitoring",
+    notifications: options.notifications,
+    errors: options.errors || [],
+    previewRows: options.previewRows || [],
+    previewCount: (options.previewRows || []).length
+  });
+}
+
+async function renderPmsHospital(req, res, statusCode = 200, errorMessage = null) {
+  const hospitalId = String(req.params.hospitalId || "");
+  if (!/^\d+$/.test(hospitalId)) {
+    return res.status(404).render("placeholder", {
+      title: "Hospital Not Found",
+      message: "The hospital could not be found."
+    });
+  }
+  const [[hospitals], [rows]] = await Promise.all([
+    pool.execute("SELECT id, name FROM hospitals WHERE id = ? LIMIT 1", [hospitalId]),
+    pool.execute(
+      `SELECT id, hospital_id, group_name, item, part_number, qty, frequency_months,
+              last_done, next_pms, notes
+       FROM pms_items
+       WHERE hospital_id = ?
+       ORDER BY group_name, item, id`,
+      [hospitalId]
+    )
+  ]);
+  const hospital = hospitals[0];
+  if (!hospital) {
+    return res.status(404).render("placeholder", {
+      title: "Hospital Not Found",
+      message: "The hospital could not be found."
+    });
+  }
+
+  const today = getTodayDate();
+  const items = rows.map((row) => {
+    const lastDone = dateOnly(row.last_done);
+    const nextPms = dateOnly(row.next_pms);
+    return {
+      ...row,
+      last_done: lastDone,
+      next_pms: nextPms,
+      days_left: daysFromToday(nextPms, today),
+      status: getPmsItemStatus(nextPms, today)
+    };
+  });
+  const counts = { preparing: 0, expiring_soon: 0, overdue: 0, for_update: 0 };
+  items.forEach((item) => {
+    counts[item.status] += 1;
+  });
+  const filter = typeof req.query.status === "string" && ["all", ...pmsStatusOrder].includes(req.query.status)
+    ? req.query.status
+    : "all";
+  const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
+  const visibleItems = items.filter((item) => {
+    const matchesStatus = filter === "all" || item.status === filter;
+    const haystack = `${item.group_name} ${item.item} ${item.part_number || ""}`.toLowerCase();
+    return matchesStatus && (!search || haystack.includes(search.toLowerCase()));
+  });
+  const [historyRows] = await pool.execute(
+    `SELECT ph.pms_item_id, ph.actor_name, ph.old_values, ph.new_values, ph.created_at
+     FROM pms_item_history ph
+     JOIN pms_items pi ON pi.id = ph.pms_item_id
+     WHERE pi.hospital_id = ?
+     ORDER BY ph.created_at DESC, ph.id DESC`,
+    [hospitalId]
+  );
+  const histories = new Map();
+  for (const entry of historyRows) {
+    const current = histories.get(String(entry.pms_item_id)) || [];
+    current.push({
+      ...entry,
+      old_values: typeof entry.old_values === "string" ? JSON.parse(entry.old_values) : entry.old_values,
+      new_values: typeof entry.new_values === "string" ? JSON.parse(entry.new_values) : entry.new_values
+    });
+    histories.set(String(entry.pms_item_id), current);
+  }
+  const groups = [];
+  for (const item of visibleItems) {
+    let group = groups[groups.length - 1];
+    if (!group || group.name !== item.group_name) {
+      group = { name: item.group_name, items: [] };
+      groups.push(group);
+    }
+    group.items.push({ ...item, history: histories.get(String(item.id)) || [] });
+  }
+
+  return res.status(statusCode).render("pms-hospital", {
+    title: hospital.name,
+    activePage: "monitoring",
+    notifications: await getNotifications(req.session.user),
+    hospital,
+    today,
+    counts,
+    total: items.length,
+    onSchedule: items.length ? Math.round((counts.preparing / items.length) * 100) : 0,
+    groups,
+    filter,
+    search,
+    canEdit: req.session.user.role === "admin",
+    errorMessage,
+    pmsStatuses,
+    formatDate: formatPmsDate
+  });
+}
+
+async function renderPmsHospitalSafely(req, res, next, statusCode, errorMessage) {
+  try {
+    return await renderPmsHospital(req, res, statusCode, errorMessage);
+  } catch (error) {
+    return next(error);
+  }
+}
+
+function handlePmsCsvUpload(req, res, next) {
+  csvUpload.single("csvFile")(req, res, (error) => {
+    if (!error) {
+      return next();
+    }
+    getNotifications(req.session.user)
+      .then((notifications) => renderPmsImport(res, {
+        statusCode: 400,
+        notifications,
+        errors: [error.code === "LIMIT_FILE_SIZE"
+          ? "CSV file must be 5 MB or smaller."
+          : "Unable to upload the CSV file."]
+      }))
+      .catch(next);
+  });
+}
 
 async function getNotifications(user) {
   const whereClause = user.role === "admin" ? "t.status = 'pending'" : "t.assigned_to = ?";
@@ -229,12 +549,333 @@ app.post("/logout", requireLogin, (req, res, next) => {
 });
 
 const staffPages = [
-  { path: "monitoring", label: "Monitoring" },
   { path: "reports", label: "Reports" }
 ];
 
+app.get("/app/monitoring", requireLogin, (req, res) => {
+  res.redirect("/staff/monitoring");
+});
+
 app.get("/app/dashboard", requireLogin, (req, res) => {
   res.redirect("/staff/dashboard");
+});
+
+app.get("/staff/monitoring", requireLogin, async (req, res, next) => {
+  try {
+    const pms = await getPmsOverview();
+    res.render("pms-overview", {
+      title: "PMS Monitoring",
+      activePage: "monitoring",
+      notifications: await getNotifications(req.session.user),
+      today: pms.today,
+      hospitalCount: pms.hospitals.length,
+      itemCount: pms.items.length,
+      counts: pms.counts,
+      hospitals: pms.hospitals,
+      overdueHospitals: pms.overdueHospitals.slice(0, 5),
+      expiringHospitals: pms.expiringHospitals.slice(0, 5),
+      pmsStatuses
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/staff/monitoring/import/template.csv", requireLogin, requireAdmin, (req, res) => {
+  res.type("text/csv");
+  res.set("Content-Disposition", "attachment; filename=\"pms-import-template.csv\"");
+  res.send(`${pmsCsvHeaders.join(",")}\r\n`);
+});
+
+app.get("/staff/monitoring/import", requireLogin, requireAdmin, async (req, res, next) => {
+  try {
+    renderPmsImport(res, {
+      notifications: await getNotifications(req.session.user),
+      errors: req.query.imported ? [`Imported ${String(req.query.imported)} PMS item(s).`] : []
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post(
+  "/staff/monitoring/import/preview",
+  requireLogin,
+  requireAdmin,
+  handlePmsCsvUpload,
+  async (req, res, next) => {
+    delete req.session.pmsImportPreview;
+    const errors = [];
+    if (!req.file) {
+      return renderPmsImport(res, {
+        statusCode: 400,
+        notifications: await getNotifications(req.session.user),
+        errors: ["Choose a CSV file to preview."]
+      });
+    }
+
+    try {
+      const source = req.file.buffer.toString("utf8");
+      const headerRows = parseCsv(source, { bom: true, to: 1, trim: true });
+      const headers = headerRows[0] || [];
+      const normalizedHeaders = headers.map((header) => String(header).trim().toLowerCase());
+      if (normalizedHeaders.length !== pmsCsvHeaders.length ||
+          pmsCsvHeaders.some((header) => !normalizedHeaders.includes(header))) {
+        return renderPmsImport(res, {
+          statusCode: 400,
+          notifications: await getNotifications(req.session.user),
+          errors: [`CSV columns must be: ${pmsCsvHeaders.join(", ")}.`]
+        });
+      }
+
+      const records = parseCsv(source, {
+        bom: true,
+        columns: (columns) => columns.map((header) => String(header).trim().toLowerCase()),
+        skip_empty_lines: true,
+        trim: true,
+        relax_column_count: false
+      });
+      if (records.length === 0) {
+        return renderPmsImport(res, {
+          statusCode: 400,
+          notifications: await getNotifications(req.session.user),
+          errors: ["CSV contains no data rows."]
+        });
+      }
+      if (records.length > 2000) {
+        return renderPmsImport(res, {
+          statusCode: 400,
+          notifications: await getNotifications(req.session.user),
+          errors: ["CSV can contain at most 2,000 data rows."]
+        });
+      }
+
+      const [hospitals] = await pool.execute("SELECT id, name FROM hospitals");
+      const hospitalsByName = new Map(
+        hospitals.map((hospital) => [hospital.name.trim().toLowerCase(), hospital])
+      );
+      const previewRows = [];
+      records.forEach((record, index) => {
+        const rowNumber = index + 2;
+        const hospitalName = String(record.hospital || "").trim();
+        const hospital = hospitalsByName.get(hospitalName.toLowerCase());
+        const frequencyMonths = Number(record.frequency_months);
+        const lastDone = String(record.last_done || "").trim();
+        const nextPms = String(record.next_pms || "").trim();
+        let valid = true;
+
+        if (!hospital) {
+          errors.push(`Row ${rowNumber}: unknown hospital "${hospitalName}".`);
+          valid = false;
+        }
+        for (const field of ["group", "item", "qty"]) {
+          if (!String(record[field] || "").trim()) {
+            errors.push(`Row ${rowNumber}: ${field} is required.`);
+            valid = false;
+          }
+        }
+        const fieldLimits = [
+          ["group", 160],
+          ["item", 180],
+          ["part_number", 180],
+          ["qty", 40]
+        ];
+        for (const [field, maxLength] of fieldLimits) {
+          if (String(record[field] || "").trim().length > maxLength) {
+            errors.push(`Row ${rowNumber}: ${field} must be ${maxLength} characters or fewer.`);
+            valid = false;
+          }
+        }
+        if (![6, 12, 24, 60].includes(frequencyMonths)) {
+          errors.push(`Row ${rowNumber}: frequency_months must be 6, 12, 24, or 60.`);
+          valid = false;
+        }
+        if (!isValidDateOnly(lastDone) || !isValidDateOnly(nextPms)) {
+          errors.push(`Row ${rowNumber}: dates must use YYYY-MM-DD.`);
+          valid = false;
+        }
+        if (!valid) {
+          return;
+        }
+        previewRows.push({
+          hospital_id: hospital.id,
+          hospital: hospital.name,
+          group_name: String(record.group).trim(),
+          item: String(record.item).trim(),
+          part_number: String(record.part_number || "").trim(),
+          qty: String(record.qty).trim(),
+          frequency_months: frequencyMonths,
+          last_done: lastDone || null,
+          next_pms: nextPms || null
+        });
+      });
+      req.session.pmsImportPreview = previewRows;
+      renderPmsImport(res, {
+        statusCode: errors.length ? 400 : 200,
+        notifications: await getNotifications(req.session.user),
+        errors,
+        previewRows
+      });
+    } catch (error) {
+      if (typeof error.code === "string" && error.code.startsWith("CSV_")) {
+        return renderPmsImport(res, {
+          statusCode: 400,
+          notifications: await getNotifications(req.session.user),
+          errors: [`Unable to parse CSV: ${error.message}`]
+        });
+      }
+      next(error);
+    }
+  }
+);
+
+app.post("/staff/monitoring/import/confirm", requireLogin, requireAdmin, async (req, res, next) => {
+  const rows = req.session.pmsImportPreview;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return renderPmsImport(res, {
+      statusCode: 400,
+      notifications: await getNotifications(req.session.user),
+      errors: ["Preview a CSV with valid rows before confirming the import."]
+    });
+  }
+
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    for (const row of rows) {
+      await connection.execute(
+        `INSERT INTO pms_items
+           (hospital_id, group_name, item, part_number, qty, frequency_months, last_done, next_pms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          row.hospital_id,
+          row.group_name,
+          row.item,
+          row.part_number || null,
+          row.qty,
+          row.frequency_months,
+          row.last_done,
+          row.next_pms
+        ]
+      );
+    }
+    await connection.commit();
+    delete req.session.pmsImportPreview;
+    res.redirect(`/staff/monitoring/import?imported=${rows.length}`);
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    next(error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
+
+app.get("/staff/monitoring/:hospitalId", requireLogin, async (req, res, next) => {
+  try {
+    await renderPmsHospital(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/staff/monitoring/:hospitalId/items/:itemId", requireLogin, requireAdmin, async (req, res, next) => {
+  const { hospitalId, itemId } = req.params;
+  if (!/^\d+$/.test(hospitalId) || !/^\d+$/.test(itemId)) {
+    return res.status(404).render("placeholder", {
+      title: "PMS item not found",
+      message: "The PMS item could not be found."
+    });
+  }
+
+  const lastDoneInput = String(req.body.last_done || "").trim();
+  const nextPmsInput = String(req.body.next_pms || "").trim();
+  const notesInput = String(req.body.notes || "").trim();
+  if (!isValidDateOnly(lastDoneInput) || !isValidDateOnly(nextPmsInput) || notesInput.length > 5000) {
+    return renderPmsHospitalSafely(
+      req,
+      res,
+      next,
+      400,
+      "Enter valid dates and keep notes to 5,000 characters or fewer."
+    );
+  }
+
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [items] = await connection.execute(
+      `SELECT id, frequency_months, last_done, next_pms, notes
+       FROM pms_items
+       WHERE id = ? AND hospital_id = ?
+       FOR UPDATE`,
+      [itemId, hospitalId]
+    );
+    const item = items[0];
+    if (!item) {
+      await connection.rollback();
+      return res.status(404).render("placeholder", {
+        title: "PMS item not found",
+        message: "The PMS item could not be found."
+      });
+    }
+
+    const oldValues = {
+      last_done: dateOnly(item.last_done),
+      next_pms: dateOnly(item.next_pms),
+      notes: item.notes || ""
+    };
+    const lastDone = lastDoneInput || null;
+    const nextPms = lastDone !== oldValues.last_done && lastDone
+      ? addMonthsToDate(lastDone, Number(item.frequency_months))
+      : nextPmsInput || null;
+    const newValues = { last_done: lastDone, next_pms: nextPms, notes: notesInput };
+    const oldChanged = {};
+    const newChanged = {};
+    for (const key of Object.keys(oldValues)) {
+      if (oldValues[key] !== newValues[key]) {
+        oldChanged[key] = oldValues[key];
+        newChanged[key] = newValues[key];
+      }
+    }
+    if (Object.keys(newChanged).length === 0) {
+      await connection.rollback();
+      return renderPmsHospitalSafely(req, res, next, 400, "Change a date or note before saving.");
+    }
+
+    await connection.execute(
+      "UPDATE pms_items SET last_done = ?, next_pms = ?, notes = ? WHERE id = ?",
+      [newValues.last_done, newValues.next_pms, newValues.notes || null, item.id]
+    );
+    await connection.execute(
+      `INSERT INTO pms_item_history
+         (pms_item_id, actor_user_id, actor_name, old_values, new_values)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        item.id,
+        req.session.user.id,
+        req.session.user.displayName,
+        JSON.stringify(oldChanged),
+        JSON.stringify(newChanged)
+      ]
+    );
+    await connection.commit();
+    res.redirect(`/staff/monitoring/${hospitalId}`);
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    next(error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
 });
 
 app.get("/staff/dashboard", requireLogin, async (req, res, next) => {
@@ -267,6 +908,7 @@ app.get("/staff/dashboard", requireLogin, async (req, res, next) => {
       ticketParams
     );
     const notifications = await getNotifications(req.session.user);
+    const pms = await getPmsOverview();
 
     res.render("dashboard", {
       title: "Dashboard",
@@ -274,8 +916,10 @@ app.get("/staff/dashboard", requireLogin, async (req, res, next) => {
       notifications,
       openTickets: Number(openTickets),
       pendingTickets: Number(pendingTickets),
-      pmsExpiringSoon: 0,
-      pmsOverdue: 0,
+      pmsExpiringSoon: pms.counts.expiring_soon,
+      pmsOverdue: pms.counts.overdue,
+      pmsOverdueHospitals: pms.overdueHospitals.slice(0, 3),
+      pmsExpiringHospitals: pms.expiringHospitals.slice(0, 3),
       recentTickets,
       ticketStatuses
     });

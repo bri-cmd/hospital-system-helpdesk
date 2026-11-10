@@ -61,12 +61,38 @@
             </div>
             <div class="dashboard-pms-sections">
               <section>
-                <h3>PMS Overdue</h3>
-                <p>No PMS data yet</p>
+                <h3>PMS Overdue <span><%= pmsOverdue %></span></h3>
+                <% if (pmsOverdueHospitals.length) { %>
+                  <ul>
+                    <% pmsOverdueHospitals.forEach((hospital) => { %>
+                      <li>
+                        <a href="/staff/monitoring/<%= hospital.hospital_id %>">
+                          <span><strong><%= hospital.hospital_name %></strong><small><%= hospital.item_count %> items · <%= hospital.group_name %></small></span>
+                          <span class="pms-date-badge badge-overdue">Overdue <%= Math.abs(hospital.days_left) %> days</span>
+                        </a>
+                      </li>
+                    <% }); %>
+                  </ul>
+                <% } else { %>
+                  <p>No PMS data yet</p>
+                <% } %>
               </section>
               <section>
-                <h3>PMS Expiring Soon</h3>
-                <p>No PMS data yet</p>
+                <h3>PMS Expiring Soon <span><%= pmsExpiringSoon %></span></h3>
+                <% if (pmsExpiringHospitals.length) { %>
+                  <ul>
+                    <% pmsExpiringHospitals.forEach((hospital) => { %>
+                      <li>
+                        <a href="/staff/monitoring/<%= hospital.hospital_id %>">
+                          <span><strong><%= hospital.hospital_name %></strong><small><%= hospital.item_count %> items · <%= hospital.group_name %></small></span>
+                          <span class="pms-date-badge badge-expiring"><%= hospital.days_left === 0 ? "Due today" : `Due in ${hospital.days_left} days` %></span>
+                        </a>
+                      </li>
+                    <% }); %>
+                  </ul>
+                <% } else { %>
+                  <p>No PMS data yet</p>
+                <% } %>
               </section>
             </div>
           </article>
