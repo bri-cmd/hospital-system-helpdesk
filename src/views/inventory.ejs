@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="staff-page">
+    <%- include("partials/staff-sidebar", { activePage }) %>
+    <div class="staff-main">
+      <%- include("partials/staff-topbar", { notifications }) %>
+      <main class="staff-content machines-content">
+        <div class="machines-heading">
+          <div>
+              <h1>Machines</h1>
+              <p>Spare parts, filters, and instruments the Hospital Systems team keeps, with part number, quantity, and status.</p>
+          </div>
+          <% if (currentUser.role === "admin") { %>
+            <a class="button button-blue" href="/staff/machines/new">+ Add machine</a>
+          <% } %>
+        </div>
+
+        <div class="machines-toolbar">
+          <nav class="machine-tabs" aria-label="Filter machines">
+            <% categories.forEach((category) => { %>
+              <a class="<%= selectedCategory === category ? 'active' : '' %>" href="/staff/machines?category=<%= encodeURIComponent(category) %>&amp;q=<%= encodeURIComponent(search) %>"><%= category %></a>
+            <% }); %>
+          </nav>
+          <form class="machine-search-form" method="get" action="/staff/machines">
+            <input type="hidden" name="category" value="<%= selectedCategory %>">
+            <label class="visually-hidden" for="machine-search">Search machines</label>
+            <input id="machine-search" name="q" type="search" value="<%= search %>" placeholder="Search machines...">
+            <button type="submit">Search</button>
+          </form>
+        </div>
+
+        <section class="machines-card">
+          <div class="machine-table-wrap">
+            <table class="machine-table">
+              <thead>
+                <tr>
+                  <th scope="col">Item name</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">Part number</th>
+                  <th scope="col">Qty</th>
+                  <th scope="col">Description</th>
+                  <th scope="col">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <% machines.forEach((machine) => { %>
+                  <tr class="machine-clickable-row" data-machine-href="/staff/machines/<%= machine.id %>">
+                    <td><strong><a class="machine-name-link" href="/staff/machines/<%= machine.id %>"><%= machine.item_name %></a></strong></td>
+                    <td><%= machine.item %></td>
+                    <td><%= machine.part_number || "—" %></td>
+                    <td><%= machine.qty %></td>
+                    <td><%= machine.description || "—" %></td>
+                    <td><span class="machine-status-badge <%= machine.display_status.toLowerCase().replace(/ /g, '-') %>"><%= machine.display_status %></span></td>
+                  </tr>
+                <% }); %>
+                <% if (!machines.length) { %>
+                  <tr><td class="machine-empty" colspan="6">No machines found.</td></tr>
+                <% } %>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <p class="machine-footer-hint">Click a row to see the full details and notes.</p>
+      </main>
+    </div>
+    <script src="/js/machines.js" defer></script>
+  </body>
+</html>

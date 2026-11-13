@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="staff-page">
+    <%- include("partials/staff-sidebar", { activePage }) %>
+    <div class="staff-main">
+      <%- include("partials/staff-topbar", { notifications }) %>
+      <main class="staff-content machines-content machine-detail-page">
+        <a class="machine-back-link" href="/staff/machines">← Back to machines</a>
+        <div class="machines-heading machine-detail-heading">
+          <div>
+            <h1><%= machine.item_name %></h1>
+            <p><%= machine.part_number || "" %></p>
+          </div>
+          <% if (canEdit) { %>
+            <div class="machine-detail-actions">
+              <button class="button button-cancel" type="button" data-open-machine-edit>Edit</button>
+            </div>
+          <% } %>
+        </div>
+        <div class="machine-detail-grid">
+          <section class="machines-card machine-specs-card">
+            <h2>Specs</h2>
+            <dl class="machine-specs">
+              <div><dt>Item name</dt><dd><%= machine.item_name %></dd></div>
+              <div><dt>Type</dt><dd><%= machine.item %></dd></div>
+              <div><dt>Part number</dt><dd><%= machine.part_number || "—" %></dd></div>
+              <div><dt>Serial number</dt><dd><%= machine.serial_number || "—" %></dd></div>
+              <div><dt>Specs</dt><dd class="machine-long-value"><%= machine.specs || "—" %></dd></div>
+              <div><dt>Notes</dt><dd class="machine-long-value"><%= machine.notes || "—" %></dd></div>
+            </dl>
+          </section>
+          <div class="machine-detail-side">
+            <section class="machines-card machine-stock-card">
+              <h2>Stock</h2>
+              <dl class="machine-specs">
+                <div><dt>Qty</dt><dd><%= machine.qty %></dd></div>
+                <div><dt>Reorder level</dt><dd><%= machine.reorder_level %></dd></div>
+                <div><dt>Status</dt><dd><span class="machine-status-badge <%= machine.display_status.toLowerCase().replace(/ /g, '-') %>"><%= machine.display_status %></span></dd></div>
+                <div><dt>Location / description</dt><dd><%= machine.description || "—" %></dd></div>
+              </dl>
+            </section>
+            <section class="machines-card machine-history-card">
+              <h2>Change history</h2>
+              <% if (history.length) { %>
+                <ol class="machine-history-list">
+                  <% history.forEach((entry) => { %>
+                    <li>
+                      <time datetime="<%= new Date(entry.created_at).toISOString() %>"><%= new Date(entry.created_at).toLocaleString() %></time>
+                      <strong><%= entry.actor_name %></strong>
+                      <% if (Object.keys(entry.new_values || {}).length) { %>
+                        <dl>
+                          <% Object.keys(entry.new_values).forEach((key) => { %>
+                            <div><dt><%= key.replace(/_/g, " ") %></dt><dd><%= entry.old_values[key] ?? "—" %> → <%= entry.new_values[key] ?? "—" %></dd></div>
+                          <% }); %>
+                        </dl>
+                      <% } %>
+                    </li>
+                  <% }); %>
+                </ol>
+              <% } else { %><p class="machine-empty">No changes recorded.</p><% } %>
+            </section>
+          </div>
+        </div>
+
+        <% if (canEdit) { %>
+          <div class="machine-edit-modal" data-machine-edit-modal <%= errorMessage ? "" : "hidden" %> data-open="<%= errorMessage ? "true" : "false" %>">
+            <section class="machines-card machine-edit-card" role="dialog" aria-modal="true" aria-labelledby="edit-machine-title">
+              <div class="machine-edit-modal-heading">
+                <h2 id="edit-machine-title">Edit machine</h2>
+                <button class="machine-modal-close" type="button" aria-label="Close" data-close-machine-edit>&times;</button>
+              </div>
+              <% if (errorMessage) { %><p class="machine-form-error" role="alert"><%= errorMessage %></p><% } %>
+              <form class="machine-form" method="post" action="/staff/machines/<%= machine.id %>/edit">
+              <div class="machine-form-field">
+                <label for="edit-machine-item-name">Item name <span aria-hidden="true">*</span></label>
+                <input id="edit-machine-item-name" name="item_name" maxlength="180" required value="<%= editValues.item_name %>">
+              </div>
+              <div class="machine-form-field">
+                <label for="edit-machine-item">Type <span aria-hidden="true">*</span></label>
+                <select id="edit-machine-item" name="item" required>
+                  <% machineItems.forEach((item) => { %>
+                    <option value="<%= item %>" <%= editValues.item === item ? "selected" : "" %>><%= item %></option>
+                  <% }); %>
+                </select>
+              </div>
+              <div class="machine-form-field">
+                <label for="edit-machine-part-number">Part number</label>
+                <input id="edit-machine-part-number" name="part_number" maxlength="180" value="<%= editValues.part_number || '' %>">
+              </div>
+              <div class="machine-form-field">
+                <label for="edit-machine-qty">Qty <span aria-hidden="true">*</span></label>
+                <input id="edit-machine-qty" name="qty" type="number" min="0" step="1" required value="<%= editValues.qty %>">
+              </div>
+              <div class="machine-form-field">
+                <label for="edit-machine-reorder-level">Reorder level <span aria-hidden="true">*</span></label>
+                <input id="edit-machine-reorder-level" name="reorder_level" type="number" min="0" step="1" required value="<%= editValues.reorder_level %>">
+              </div>
+              <div class="machine-form-field">
+                <label for="edit-machine-description">Description</label>
+                <textarea id="edit-machine-description" name="description"><%= editValues.description || '' %></textarea>
+              </div>
+              <div class="machine-form-field">
+                <label for="edit-machine-serial">Serial number</label>
+                <input id="edit-machine-serial" name="serial_number" maxlength="120" value="<%= editValues.serial_number || '' %>">
+              </div>
+              <div class="machine-form-field">
+                <label for="edit-machine-specs">Specs</label>
+                <textarea id="edit-machine-specs" name="specs"><%= editValues.specs || '' %></textarea>
+              </div>
+              <div class="machine-form-field">
+                <label for="edit-machine-status">Status <span aria-hidden="true">*</span></label>
+                <select id="edit-machine-status" name="status" required>
+                  <% machineStatuses.forEach((status) => { %>
+                    <option value="<%= status %>" <%= editValues.status === status ? "selected" : "" %>><%= status %></option>
+                  <% }); %>
+                </select>
+              </div>
+              <div class="machine-form-field machine-form-notes">
+                <label for="edit-machine-notes">Notes</label>
+                <textarea id="edit-machine-notes" name="notes"><%= editValues.notes || '' %></textarea>
+              </div>
+              <div class="machine-form-actions">
+                <button class="button button-blue" type="submit">Save changes</button>
+                <button class="button button-cancel" type="button" data-close-machine-edit>Cancel</button>
+              </div>
+              </form>
+            </section>
+          </div>
+        <% } %>
+      </main>
+    </div>
+    <script src="/js/machine-detail.js" defer></script>
+  </body>
+</html>

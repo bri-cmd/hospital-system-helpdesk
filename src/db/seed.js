@@ -55,6 +55,17 @@ const samplePmsItems = [
   ["Mactan Medical", "Air Treatment", "Bacterial Filter", "Air treatment bacterial filter", "1 PC/S", 24, "2025-03-01", "2027-03-01"]
 ];
 
+// Sample company inventory data.
+const sampleMachines = [
+  ["Air filter element", "Filters", "E0620X1", 1, 2, "Spare parts shelf A", "Air filter element", "HS-SP-001", "In stock", null],
+  ["Oil filter element", "Filters", "A04819974", 4, 2, "Spare parts shelf A", "Oil filter element", "HS-SP-002", "In stock", null],
+  ["Air-oil separator", "Compressor parts", "A10525274", 0, 1, "Spare parts shelf B", "Air-oil separator", "HS-SP-003", "In stock", null],
+  ["V-belt", "Compressor parts", "V-BELT", 2, 1, "Spare parts shelf B", "Compressor V-belt", "HS-SP-004", "In use", null],
+  ["Compressor oil (ORELUBE)", "Compressor parts", "ORELUBE", 3, 1, "Lubricants cabinet", "Compressor oil, pail", "HS-SP-005", "Under repair", null],
+  ["Pressure gauge 0-400 psi", "Gauges and instruments", "0-400 PSI", 1, 2, "Instrument drawer A", "Pressure gauge, 0-400 psi", "HS-SP-006", "In stock", null],
+  ["Handheld analyzer", "Gauges and instruments", "HANDHELD-ANALYZER", 2, 1, "Instrument drawer B", "Handheld analyzer", "HS-SP-007", "In use", null]
+];
+
 const sampleTickets = [
   {
     number: "740201",
@@ -179,6 +190,38 @@ async function seed() {
            ON DUPLICATE KEY UPDATE name = VALUES(name)`,
           [code, name]
         );
+      }
+
+      await connection.execute(
+        "DELETE FROM machines WHERE asset_tag IN ('BMC-001', 'BMC-002', 'BMC-003', 'BMC-004', 'BMC-005')"
+      );
+      for (const [index, [itemName, item, partNumber, qty, reorderLevel, description, specs, serialNumber, status, notes]] of sampleMachines.entries()) {
+        const legacyName = `HS-${String(index + 1).padStart(3, "0")}`;
+        const [[existingMachine]] = await connection.execute(
+          `SELECT id FROM machines
+           WHERE serial_number = ? OR item_name IN (?, ?)
+           ORDER BY CASE WHEN serial_number = ? THEN 0
+                         WHEN item_name = ? THEN 1
+                         ELSE 2 END
+           LIMIT 1`,
+          [serialNumber, legacyName, itemName, serialNumber, legacyName]
+        );
+        if (existingMachine) {
+          await connection.execute(
+            `UPDATE machines
+             SET asset_tag = NULL, item_name = ?, item = ?, part_number = ?, qty = ?,
+                 reorder_level = ?, description = ?, specs = ?, serial_number = ?, status = ?, notes = ?
+             WHERE id = ?`,
+            [itemName, item, partNumber, qty, reorderLevel, description, specs, serialNumber, status, notes, existingMachine.id]
+          );
+        } else {
+          await connection.execute(
+            `INSERT INTO machines
+               (item_name, item, part_number, qty, reorder_level, description, specs, serial_number, status, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [itemName, item, partNumber, qty, reorderLevel, description, specs, serialNumber, status, notes]
+          );
+        }
       }
 
       for (const [

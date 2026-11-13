@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= title %> | Hospital Systems Helpdesk</title>
+    <link rel="stylesheet" href="/css/styles.css">
+  </head>
+  <body class="staff-page">
+    <%- include("partials/staff-sidebar", { activePage }) %>
+    <div class="staff-main">
+      <%- include("partials/staff-topbar", { notifications }) %>
+      <main class="staff-content machines-content">
+        <a class="machine-back-link" href="/staff/machines">← Back to machines</a>
+        <div class="machines-heading machine-form-heading">
+          <div>
+            <h1>Add machine</h1>
+            <p>Add a machine.</p>
+          </div>
+        </div>
+        <% if (errorMessage) { %><p class="machine-form-error" role="alert"><%= errorMessage %></p><% } %>
+        <section class="machines-card machine-form-card">
+          <form class="machine-form" method="post" action="/staff/machines">
+            <div class="machine-form-field">
+              <label for="machine-item-name">Item name <span aria-hidden="true">*</span></label>
+              <input id="machine-item-name" name="item_name" maxlength="180" required value="<%= values.item_name || '' %>" placeholder="Air filter element">
+            </div>
+            <div class="machine-form-field">
+              <label for="machine-item">Type <span aria-hidden="true">*</span></label>
+              <select id="machine-item" name="item" required>
+                <option value="">Select item type</option>
+                <% machineItems.forEach((item) => { %>
+                  <option value="<%= item %>" <%= values.item === item ? "selected" : "" %>><%= item %></option>
+                <% }); %>
+              </select>
+            </div>
+            <div class="machine-form-field">
+              <label for="machine-part-number">Part number</label>
+              <input id="machine-part-number" name="part_number" maxlength="180" value="<%= values.part_number || '' %>">
+            </div>
+            <div class="machine-form-field">
+              <label for="machine-qty">Qty <span aria-hidden="true">*</span></label>
+              <input id="machine-qty" name="qty" type="number" min="0" step="1" required value="<%= values.qty ?? 1 %>">
+            </div>
+            <div class="machine-form-field">
+              <label for="machine-reorder-level">Reorder level <span aria-hidden="true">*</span></label>
+              <input id="machine-reorder-level" name="reorder_level" type="number" min="0" step="1" required value="<%= values.reorder_level ?? 1 %>">
+            </div>
+            <div class="machine-form-field">
+              <label for="machine-description">Description</label>
+              <textarea id="machine-description" name="description"><%= values.description || '' %></textarea>
+            </div>
+            <div class="machine-form-field">
+              <label for="machine-serial">Serial number</label>
+              <input id="machine-serial" name="serial_number" maxlength="120" value="<%= values.serial_number || '' %>">
+            </div>
+            <div class="machine-form-field">
+              <label for="machine-specs">Specs</label>
+              <textarea id="machine-specs" name="specs"><%= values.specs || '' %></textarea>
+            </div>
+            <div class="machine-form-field">
+              <label for="machine-status">Status <span aria-hidden="true">*</span></label>
+              <select id="machine-status" name="status" required>
+                <% machineStatuses.forEach((status) => { %>
+                  <option value="<%= status %>" <%= values.status === status || (!values.status && status === "In stock") ? "selected" : "" %>><%= status %></option>
+                <% }); %>
+              </select>
+            </div>
+            <div class="machine-form-field machine-form-notes">
+              <label for="machine-notes">Notes</label>
+              <textarea id="machine-notes" name="notes"><%= values.notes || '' %></textarea>
+            </div>
+            <div class="machine-form-actions">
+              <button class="button button-blue" type="submit">Save machine</button>
+              <a class="button button-cancel" href="/staff/machines">Cancel</a>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

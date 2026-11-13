@@ -101,6 +101,8 @@ const ticketStatuses = {
 };
 const editableTicketStatuses = ["approved", "in_progress", "waiting_for_parts", "resolved"];
 const ticketPriorities = ["Urgent", "High", "Medium", "Low"];
+const machineStatuses = ["In stock", "In use", "Under repair"];
+const machineItems = ["Filters", "Compressor parts", "Gauges and instruments", "Other"];
 const pmsStatuses = {
   preparing: "Preparing",
   expiring_soon: "Expiring soon",
@@ -344,6 +346,18 @@ function formatAverageDuration(milliseconds) {
   }
   const hours = Math.floor(minutes / 60);
   return `${hours} hr ${minutes % 60} min`;
+}
+
+function getMachineInventoryStatus(machine) {
+  const qty = Number(machine.qty);
+  const reorderLevel = Number(machine.reorder_level);
+  if (machine.status === "In stock" && qty === 0) {
+    return "Out of stock";
+  }
+  if (machine.status === "In stock" && qty > 0 && qty <= reorderLevel) {
+    return "Low stock";
+  }
+  return machine.status;
 }
 
 function renderPmsImport(res, options = {}) {
@@ -1216,6 +1230,400 @@ app.get("/staff/monitoring", requireLogin, async (req, res, next) => {
   }
 });
 
+app.get("/staff/inventory", requireLogin, (req, res) => {
+  res.redirect(301, "/staff/machines");
+});
+
+app.get("/staff/inventory/new", requireLogin, requireAdmin, (req, res) => {
+  res.redirect(301, "/staff/machines/new");
+});
+
+app.get("/staff/machines", requireLogin, async (req, res, next) => {
+  const categories = ["All machines", "Filters", "Compressor parts", "Instruments", "Other"];
+  const category = categories.includes(req.query.category) ? req.query.category : "All machines";
+  const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
+  const conditions = [];
+  const params = [];
+  if (category === "Filters" || category === "Compressor parts" || category === "Other") {
+    conditions.push("item = ?");
+    params.push(category);
+  } else if (category === "Instruments") {
+    conditions.push("item = 'Gauges and instruments'");
+  }
+  if (search) {
+    conditions.push("(item_name LIKE ? OR part_number LIKE ? OR description LIKE ?)");
+    const term = `%${search}%`;
+    params.push(term, term, term);
+  }
+
+  try {
+    const [machines] = await pool.execute(
+      `SELECT id, item_name, item, part_number, qty, reorder_level, description, status
+       FROM machines
+       ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+       ORDER BY item_name`,
+      params
+    );
+    res.render("inventory", {
+      title: "Machines",
+      activePage: "machines",
+      notifications: await getNotifications(req.session.user),
+      machines: machines.map((machine) => ({
+        ...machine,
+        display_status: getMachineInventoryStatus(machine)
+      })),
+      categories,
+      selectedCategory: category,
+      search
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/staff/machines/new", requireLogin, requireAdmin, async (req, res, next) => {
+  try {
+    res.render("machine-new", {
+      title: "Add machine",
+      activePage: "machines",
+      notifications: await getNotifications(req.session.user),
+      values: {},
+      machineStatuses,
+      machineItems,
+      errorMessage: null
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/staff/machines", requireLogin, requireAdmin, async (req, res, next) => {
+  const values = {
+    item_name: String(req.body.item_name || "").trim(),
+    item: String(req.body.item || "").trim(),
+    part_number: String(req.body.part_number || "").trim(),
+    qty: String(req.body.qty || "").trim(),
+    reorder_level: String(req.body.reorder_level || "").trim(),
+    description: String(req.body.description || "").trim(),
+    serial_number: String(req.body.serial_number || "").trim(),
+    specs: String(req.body.specs || "").trim(),
+    status: String(req.body.status || ""),
+    notes: String(req.body.notes || "").trim()
+  };
+  const isValid = values.item_name.length > 0 && values.item_name.length <= 180 &&
+    machineItems.includes(values.item) &&
+    (!values.part_number || values.part_number.length <= 180) &&
+    /^\d+$/.test(values.qty) && Number.isSafeInteger(Number(values.qty)) &&
+    Number(values.qty) >= 0 && Number(values.qty) <= 2147483647 &&
+    /^\d+$/.test(values.reorder_level) && Number.isSafeInteger(Number(values.reorder_level)) &&
+    Number(values.reorder_level) <= 2147483647 &&
+    (!values.serial_number || values.serial_number.length <= 120) &&
+    machineStatuses.includes(values.status);
+  if (!isValid) {
+    try {
+      return res.status(400).render("machine-new", {
+        title: "Add machine",
+        activePage: "machines",
+        notifications: await getNotifications(req.session.user),
+        values,
+        machineStatuses,
+        machineItems,
+        errorMessage: "Enter an item name, type, whole-number quantity and reorder level, and valid status."
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [result] = await connection.execute(
+      `INSERT INTO machines
+         (item_name, item, part_number, qty, reorder_level, description, specs, serial_number, status, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        values.item_name,
+        values.item,
+        values.part_number || null,
+        Number(values.qty),
+        Number(values.reorder_level),
+        values.description || null,
+        values.specs || null,
+        values.serial_number || null,
+        values.status,
+        values.notes || null
+      ]
+    );
+    const newValues = {
+      ...values,
+      qty: Number(values.qty),
+      reorder_level: Number(values.reorder_level),
+      part_number: values.part_number || null,
+      description: values.description || null,
+      specs: values.specs || null,
+      serial_number: values.serial_number || null,
+      notes: values.notes || null
+    };
+    await connection.execute(
+      `INSERT INTO machine_history
+         (machine_id, actor_user_id, actor_name, old_values, new_values)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        result.insertId,
+        req.session.user.id,
+        req.session.user.displayName,
+        JSON.stringify({}),
+        JSON.stringify(newValues)
+      ]
+    );
+    await connection.commit();
+    res.redirect(`/staff/machines/${result.insertId}`);
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    if (error.code === "ER_DUP_ENTRY") {
+      try {
+        return res.status(409).render("machine-new", {
+          title: "Add machine",
+          activePage: "machines",
+          notifications: await getNotifications(req.session.user),
+          values,
+          machineStatuses,
+          machineItems,
+          errorMessage: "The machine could not be saved."
+        });
+      } catch (renderError) {
+        return next(renderError);
+      }
+    }
+    next(error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
+
+app.get("/staff/inventory/:id", requireLogin, (req, res) => {
+  res.redirect(301, `/staff/machines/${req.params.id}`);
+});
+
+app.get("/staff/machines/:id", requireLogin, async (req, res, next) => {
+  const machineId = String(req.params.id || "");
+  if (!/^\d+$/.test(machineId)) {
+    return res.status(404).render("placeholder", {
+      title: "Machine Not Found",
+      message: "The machine could not be found."
+    });
+  }
+  try {
+    const [[machines], [historyRows]] = await Promise.all([
+      pool.execute(
+        `SELECT id, item_name, item, part_number, qty, reorder_level, description, specs, serial_number, status, notes,
+                created_at, updated_at
+         FROM machines WHERE id = ? LIMIT 1`,
+        [machineId]
+      ),
+      pool.execute(
+        `SELECT actor_name, old_values, new_values, created_at
+         FROM machine_history WHERE machine_id = ?
+         ORDER BY created_at DESC, id DESC`,
+        [machineId]
+      )
+    ]);
+    const machine = machines[0];
+    if (!machine) {
+      return res.status(404).render("placeholder", {
+        title: "Machine Not Found",
+        message: "The machine could not be found."
+      });
+    }
+    const history = historyRows.map((entry) => ({
+      ...entry,
+      old_values: typeof entry.old_values === "string" ? JSON.parse(entry.old_values) : entry.old_values,
+      new_values: typeof entry.new_values === "string" ? JSON.parse(entry.new_values) : entry.new_values
+    }));
+    res.render("machine-detail", {
+      title: machine.item_name,
+      activePage: "machines",
+      notifications: await getNotifications(req.session.user),
+      machine: { ...machine, display_status: getMachineInventoryStatus(machine) },
+      machineStatuses,
+      machineItems,
+      editValues: machine,
+      history,
+      canEdit: req.session.user.role === "admin",
+      errorMessage: null
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/staff/machines/:id/edit", requireLogin, requireAdmin, async (req, res, next) => {
+  const machineId = String(req.params.id || "");
+  const values = {
+    item_name: String(req.body.item_name || "").trim(),
+    item: String(req.body.item || "").trim(),
+    part_number: String(req.body.part_number || "").trim(),
+    qty: String(req.body.qty || "").trim(),
+    reorder_level: String(req.body.reorder_level || "").trim(),
+    description: String(req.body.description || "").trim(),
+    serial_number: String(req.body.serial_number || "").trim(),
+    specs: String(req.body.specs || "").trim(),
+    status: String(req.body.status || ""),
+    notes: String(req.body.notes || "").trim()
+  };
+  if (!/^\d+$/.test(machineId) || !values.item_name || values.item_name.length > 180 ||
+      !machineItems.includes(values.item) || !/^\d+$/.test(values.qty) ||
+      !Number.isSafeInteger(Number(values.qty)) || Number(values.qty) < 0 ||
+      Number(values.qty) > 2147483647 || (values.part_number && values.part_number.length > 180) ||
+      (values.serial_number && values.serial_number.length > 120) ||
+      !/^\d+$/.test(values.reorder_level) ||
+      !Number.isSafeInteger(Number(values.reorder_level)) ||
+      Number(values.reorder_level) > 2147483647 ||
+      !machineStatuses.includes(values.status)) {
+    try {
+      const [[machines], [historyRows]] = await Promise.all([
+        pool.execute(
+          `SELECT id, item_name, item, part_number, qty, reorder_level, description, specs, serial_number, status, notes,
+                  created_at, updated_at
+           FROM machines WHERE id = ? LIMIT 1`,
+          [machineId]
+        ),
+        pool.execute(
+          `SELECT actor_name, old_values, new_values, created_at
+           FROM machine_history WHERE machine_id = ?
+           ORDER BY created_at DESC, id DESC`,
+          [machineId]
+        )
+      ]);
+      const machine = machines[0];
+      if (!machine) {
+        return res.status(404).render("placeholder", {
+          title: "Machine Not Found",
+          message: "The machine could not be found."
+        });
+      }
+      const history = historyRows.map((entry) => ({
+        ...entry,
+        old_values: typeof entry.old_values === "string" ? JSON.parse(entry.old_values) : entry.old_values,
+        new_values: typeof entry.new_values === "string" ? JSON.parse(entry.new_values) : entry.new_values
+      }));
+      return res.status(400).render("machine-detail", {
+        title: machine.item_name,
+        activePage: "machines",
+        notifications: await getNotifications(req.session.user),
+        machine: { ...machine, display_status: getMachineInventoryStatus(machine) },
+        machineStatuses,
+        machineItems,
+        editValues: values,
+        history,
+        canEdit: true,
+        errorMessage: "Enter valid machine details."
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      `SELECT item_name, item, part_number, qty, reorder_level, description, specs, serial_number, status, notes
+       FROM machines WHERE id = ? FOR UPDATE`,
+      [machineId]
+    );
+    const machine = rows[0];
+    if (!machine) {
+      await connection.rollback();
+      return res.status(404).render("placeholder", {
+        title: "Machine Not Found",
+        message: "The machine could not be found."
+      });
+    }
+    const oldValues = {
+      ...machine,
+      qty: Number(machine.qty),
+      reorder_level: Number(machine.reorder_level)
+    };
+    const newValues = {
+      item_name: values.item_name,
+      item: values.item,
+      part_number: values.part_number || null,
+      qty: Number(values.qty),
+      reorder_level: Number(values.reorder_level),
+      description: values.description || null,
+      specs: values.specs || null,
+      serial_number: values.serial_number || null,
+      status: values.status,
+      notes: values.notes || null
+    };
+    const oldChanged = {};
+    const newChanged = {};
+    for (const key of Object.keys(oldValues)) {
+      if (oldValues[key] !== newValues[key]) {
+        oldChanged[key] = oldValues[key];
+        newChanged[key] = newValues[key];
+      }
+    }
+    if (!Object.keys(newChanged).length) {
+      await connection.rollback();
+      return res.redirect(`/staff/machines/${machineId}`);
+    }
+    await connection.execute(
+      `UPDATE machines
+       SET item_name = ?, item = ?, part_number = ?, qty = ?, reorder_level = ?, description = ?,
+           specs = ?, serial_number = ?, status = ?, notes = ?
+       WHERE id = ?`,
+      [
+        newValues.item_name,
+        newValues.item,
+        newValues.part_number,
+        newValues.qty,
+        newValues.reorder_level,
+        newValues.description,
+        newValues.specs,
+        newValues.serial_number,
+        newValues.status,
+        newValues.notes,
+        machineId
+      ]
+    );
+    await connection.execute(
+      `INSERT INTO machine_history
+         (machine_id, actor_user_id, actor_name, old_values, new_values)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        machineId,
+        req.session.user.id,
+        req.session.user.displayName,
+        JSON.stringify(oldChanged),
+        JSON.stringify(newChanged)
+      ]
+    );
+    await connection.commit();
+    res.redirect(`/staff/machines/${machineId}`);
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).render("error", { title: "The machine could not be saved" });
+    }
+    next(error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
+
 app.get("/staff/monitoring/import/template.csv", requireLogin, requireAdmin, (req, res) => {
   res.type("text/csv");
   res.set("Content-Disposition", "attachment; filename=\"pms-import-template.csv\"");
@@ -1871,7 +2279,6 @@ app.post("/tickets/new", async (req, res, next) => {
     if (hospitalId && !selectedHospital) {
       errors.push("Please select a hospital from the list.");
     }
-
     if (errors.length > 0) {
       return res.status(400).render("ticket-new", {
         title: "Open a New Ticket",
@@ -1889,7 +2296,8 @@ app.post("/tickets/new", async (req, res, next) => {
         await connection.beginTransaction();
         try {
           const [ticketResult] = await connection.execute(
-            `INSERT INTO tickets (ticket_number, hospital_id, subject, description, status)
+            `INSERT INTO tickets
+               (ticket_number, hospital_id, subject, description, status)
              VALUES (?, ?, ?, ?, 'pending')`,
             [ticketNumber, selectedHospital.id, summary, details]
           );
