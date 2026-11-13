@@ -1,38 +1,161 @@
-<header class="topbar">
+<%
+  const titleFor = (n) => {
+    const t = String(n.type || "").toLowerCase();
+    if (t.includes("new") || t.includes("created")) return "New Ticket";
+    if (t.includes("approv")) return "Ticket approved";
+    if (t.includes("assign")) return "Ticket assigned";
+    if (t.includes("status")) return "Status updated";
+    if (t.includes("message")) return "New message";
+    if (t.includes("pms")) return "PMS overdue";
+    return "Notification";
+  };
+  const avatarSrc = currentUser.avatarPath ? "/avatars/" + encodeURIComponent(currentUser.avatarPath) : "/images/logo.png";
+%>
+<header class="topbar" data-staff-topbar data-user-id="<%= currentUser.id %>" data-csrf-token="<%= csrfToken %>" data-notification-max-id="<%= notifications.maxId %>" data-unread-count="<%= notifications.count %>">
   <div class="topbar-spacer"></div>
+
   <details class="notification-menu">
-    <summary aria-label="Notifications: <%= notifications.count %>">
+    <summary aria-label="Notifications: <%= notifications.count %> unread">
       <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
-        <path d="M10 21a2 2 0 0 0 4 0" />
+        <path d="M12 2a1.5 1.5 0 0 1 1.5 1.5v.7A6.5 6.5 0 0 1 18.5 10.5c0 4.2 1.4 5.3 2.3 6.2.4.4.2 1.3-.5 1.3H3.7c-.7 0-.9-.9-.5-1.3.9-.9 2.3-2 2.3-6.2A6.5 6.5 0 0 1 10.5 4.2v-.7A1.5 1.5 0 0 1 12 2Z"/>
+        <path d="M9.5 20h5a2.5 2.5 0 0 1-5 0Z"/>
       </svg>
-      <span class="notification-count"><%= notifications.count > 99 ? "99+" : notifications.count %></span>
+      <span class="notification-count" data-notification-count <%= notifications.count ? "" : "hidden" %>><%= notifications.count > 99 ? "99+" : notifications.count %></span>
     </summary>
-    <div class="notification-popover">
-      <h2><%= currentUser.role === "admin" ? "Pending tickets" : "Assigned tickets" %></h2>
-      <% if (notifications.tickets.length > 0) { %>
-        <ul>
-          <% notifications.tickets.forEach((ticket) => { %>
-            <li>
-              <a href="/staff/tickets/<%= ticket.ticket_number %>">
-                <strong>Ticket-<%= ticket.ticket_number %></strong>
-                <span><%= ticket.subject %></span>
-                <small><%= ticket.hospital_name %></small>
-              </a>
-            </li>
-          <% }); %>
-        </ul>
-      <% } else { %>
-        <p>No tickets to review.</p>
-      <% } %>
+
+    <div class="notification-popover" data-tab="unread" data-notification-popover>
+      <div class="notification-popover-heading">
+        <h2>Notification</h2>
+        <div class="notification-heading-actions">
+          <form method="post" action="/staff/notifications/read-all" data-mark-notifications-read>
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+            <button type="submit">Mark all as read</button>
+          </form>
+          <span class="notification-more" aria-hidden="true">&middot;&middot;&middot;</span>
+        </div>
+      </div>
+
+      <div class="notification-tabs" role="tablist">
+        <button type="button" class="active" role="tab" data-notification-tab="unread">Unread (<span data-unread-tab-count><%= notifications.count %></span>)</button>
+        <button type="button" role="tab" data-notification-tab="all">All</button>
+      </div>
+
+      <ul data-notification-list>
+        <% notifications.items.forEach((notification) => { %>
+          <li class="<%= notification.is_read ? '' : 'unread' %>" data-notification-id="<%= notification.id %>">
+            <a href="/staff/notifications/<%= notification.id %>/open">
+              <img class="notification-avatar" src="/images/logo.png" alt="">
+              <span class="notification-body">
+                <strong class="notification-title"><%= titleFor(notification) %></strong>
+                <span class="notification-message"><%= notification.message %></span>
+                <time data-notification-time datetime="<%= new Date(notification.created_at).toISOString() %>"><%= new Date(notification.created_at).toLocaleString() %></time>
+              </span>
+              <span class="notification-unread-dot" aria-label="Unread" <%= notification.is_read ? "hidden" : "" %>></span>
+            </a>
+          </li>
+        <% }); %>
+      </ul>
+      <p data-notification-empty <%= notifications.items.length ? "hidden" : "" %>>No notifications</p>
     </div>
   </details>
-  <div class="user-summary">
-    <span class="user-avatar" aria-hidden="true"><%= currentUser.displayName.slice(0, 1).toUpperCase() %></span>
-    <span class="user-name"><%= currentUser.displayName %></span>
-    <span class="role-badge"><%= currentUser.role === "admin" ? "Admin" : "Staff" %></span>
+
+  <div class="profile-menu" data-profile-menu>
+    <button class="user-summary" type="button" aria-expanded="false" aria-haspopup="true" data-profile-toggle>
+      <img class="user-avatar user-avatar-photo" src="<%= avatarSrc %>" alt="">
+      <span class="user-name"><%= currentUser.displayName %></span>
+      <span class="role-badge"><%= currentUser.role === "admin" ? "Admin" : "Staff" %></span>
+      <svg class="user-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+    <div class="profile-popover" data-profile-popover hidden>
+      <div class="profile-identity">
+        <img class="user-avatar user-avatar-photo" src="<%= avatarSrc %>" alt="">
+        <div>
+          <strong><%= currentUser.displayName %></strong>
+          <span><%= currentUser.username %></span>
+          <span class="role-badge"><%= currentUser.role === "admin" ? "Admin" : "Staff" %></span>
+        </div>
+      </div>
+      <button type="button" data-open-avatar-modal>Change photo</button>
+      <button type="button" data-open-password-modal>Change password</button>
+      <label class="notification-sound-toggle">
+        <input type="checkbox" data-notification-sound checked>
+        <span>Notification sound: <strong data-sound-state>On</strong></span>
+      </label>
+      <form class="profile-signout-form" method="post" action="/logout">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <button type="submit">Sign out</button>
+      </form>
+    </div>
   </div>
-  <form class="logout-form" method="post" action="/logout">
-    <button type="submit" class="logout-button">Sign out</button>
-  </form>
+
+  <div class="profile-modal" data-avatar-modal hidden>
+    <section class="profile-modal-card" role="dialog" aria-modal="true" aria-labelledby="avatar-modal-title">
+      <h2 id="avatar-modal-title">Change photo</h2>
+      <div class="avatar-preview">
+        <span class="user-avatar" data-avatar-initial <%= currentUser.avatarPath ? "hidden" : "" %>><%= currentUser.displayName.slice(0, 1).toUpperCase() %></span>
+        <% if (currentUser.avatarPath) { %>
+          <img class="user-avatar user-avatar-photo" data-avatar-preview src="/avatars/<%= encodeURIComponent(currentUser.avatarPath) %>" alt="Photo preview">
+        <% } else { %>
+          <img class="user-avatar user-avatar-photo" data-avatar-preview alt="Photo preview" hidden>
+        <% } %>
+      </div>
+      <form method="post" action="/staff/profile/photo" enctype="multipart/form-data" data-avatar-form>
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <input type="hidden" name="removePhoto" value="0" data-remove-avatar-value>
+        <label for="profile-photo-file">JPG, PNG, or WebP; maximum 2 MB</label>
+        <input id="profile-photo-file" name="photo" type="file" accept="image/jpeg,image/png,image/webp" data-avatar-file>
+        <p class="profile-modal-error" role="alert" data-avatar-error hidden></p>
+        <div class="profile-modal-actions">
+          <button class="button button-blue" type="submit">Save</button>
+          <button class="button button-cancel" type="button" data-remove-avatar>Remove photo</button>
+          <button class="button button-cancel" type="button" data-close-profile-modal>Cancel</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <div class="profile-modal" data-password-modal hidden>
+    <section class="profile-modal-card" role="dialog" aria-modal="true" aria-labelledby="password-modal-title">
+      <h2 id="password-modal-title">Change password</h2>
+      <form method="post" action="/staff/profile/password" data-password-form>
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <label for="current-password">Current password</label>
+        <input id="current-password" name="currentPassword" type="password" autocomplete="current-password" required>
+        <label for="new-password">New password</label>
+        <input id="new-password" name="newPassword" type="password" minlength="8" autocomplete="new-password" required>
+        <label for="confirm-password">Confirm new password</label>
+        <input id="confirm-password" name="confirmPassword" type="password" minlength="8" autocomplete="new-password" required>
+        <p class="profile-modal-error" role="alert" data-password-error hidden></p>
+        <p class="profile-modal-success" role="status" data-password-success hidden></p>
+        <div class="profile-modal-actions">
+          <button class="button button-blue" type="submit">Save</button>
+          <button class="button button-cancel" type="button" data-close-profile-modal>Cancel</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <div class="staff-toast-container" data-toast-container aria-live="polite"></div>
+
+  <script>
+    (function () {
+      var pop = document.querySelector("[data-notification-popover]");
+      if (!pop) return;
+      pop.querySelectorAll("[data-notification-tab]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          pop.dataset.tab = btn.dataset.notificationTab;
+          pop.querySelectorAll("[data-notification-tab]").forEach(function (b) {
+            b.classList.toggle("active", b === btn);
+          });
+        });
+      });
+      var list = pop.querySelector("[data-notification-list]");
+      var counter = pop.querySelector("[data-unread-tab-count]");
+      function sync() { counter.textContent = list.querySelectorAll("li.unread").length; }
+      new MutationObserver(sync).observe(list, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+      sync();
+    })();
+  </script>
+  <script src="/js/staff-topbar.js" defer></script>
+  <script src="/js/staff-toast-style.js" defer></script>
 </header>

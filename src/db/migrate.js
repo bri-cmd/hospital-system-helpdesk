@@ -40,7 +40,8 @@ async function migrate() {
     const userColumns = [
       ["is_active", "BOOLEAN NOT NULL DEFAULT TRUE"],
       ["is_primary_admin", "BOOLEAN NOT NULL DEFAULT FALSE"],
-      ["last_sign_in", "TIMESTAMP NULL"]
+      ["last_sign_in", "TIMESTAMP NULL"],
+      ["avatar_path", "VARCHAR(255) NULL"]
     ];
     for (const [column, definition] of userColumns) {
       const [existingColumns] = await connection.query(
@@ -66,6 +67,23 @@ async function migrate() {
         KEY ix_user_account_history_created (created_at),
         CONSTRAINT fk_user_account_history_actor FOREIGN KEY (actor_user_id) REFERENCES users (id) ON DELETE SET NULL,
         CONSTRAINT fk_user_account_history_target FOREIGN KEY (target_user_id) REFERENCES users (id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        user_id BIGINT UNSIGNED NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        message VARCHAR(500) NOT NULL,
+        link VARCHAR(500) NULL,
+        is_read BOOLEAN NOT NULL DEFAULT FALSE,
+        dedupe_key VARCHAR(180) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_notifications_user_dedupe (user_id, dedupe_key),
+        KEY ix_notifications_user_read_id (user_id, is_read, id),
+        CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 

@@ -7,8 +7,9 @@ const helmet = require("helmet");
 const { rateLimit } = require("express-rate-limit");
 const multer = require("multer");
 const path = require("path");
+const fs = require("fs/promises");
 const { createPool } = require("./db");
-const { randomInt } = require("crypto");
+const { randomBytes, randomInt, timingSafeEqual } = require("crypto");
 const { parse: parseCsv } = require("csv-parse/sync");
 
 if (!process.env.SESSION_SECRET) {
@@ -18,6 +19,7 @@ if (!process.env.SESSION_SECRET) {
 const app = express();
 const pool = createPool();
 const port = Number(process.env.PORT || 3001);
+const avatarDirectory = path.join(__dirname, "..", "uploads", "avatars");
 
 const submissionLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -30,6 +32,16 @@ const submissionLimiter = rateLimit({
       message: "Too many ticket submissions have been received. Please try again later."
     });
   }
+});
+const notificationPollLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024, files: 1, fields: 2, fieldSize: 1024, parts: 3 }
 });
 
 app.set("view engine", "ejs");
@@ -60,6 +72,14 @@ app.use(
 );
 
 app.use((req, res, next) => {
+  if (req.session.user && !req.session.csrfToken) {
+    req.session.csrfToken = randomBytes(32).toString("hex");
+  }
+  res.locals.csrfToken = req.session.user ? req.session.csrfToken : "";
+  next();
+});
+
+app.use((req, res, next) => {
   res.locals.currentUser = req.session.user || null;
   next();
 });
@@ -70,7 +90,7 @@ async function requireLogin(req, res, next) {
   }
   try {
     const [users] = await pool.execute(
-      "SELECT display_name, role, is_active FROM users WHERE id = ? LIMIT 1",
+      "SELECT username, display_name, role, is_active, avatar_path FROM users WHERE id = ? LIMIT 1",
       [req.session.user.id]
     );
     const user = users[0];
@@ -85,10 +105,98 @@ async function requireLogin(req, res, next) {
     }
     req.session.user.displayName = user.display_name;
     req.session.user.role = user.role;
+    req.session.user.username = user.username;
+    req.session.user.avatarPath = user.avatar_path;
     res.locals.currentUser = req.session.user;
     next();
   } catch (error) {
     next(error);
+  }
+}
+
+function requireCsrf(req, res, next) {
+  const submittedToken = req.get("x-csrf-token") || req.body?._csrf;
+  const sessionToken = req.session.csrfToken;
+  if (typeof submittedToken !== "string" || typeof sessionToken !== "string") {
+    return res.status(403).json({ error: "Your session token is invalid. Refresh and try again." });
+  }
+  const submittedBytes = Buffer.from(submittedToken);
+  const sessionBytes = Buffer.from(sessionToken);
+  if (submittedBytes.length !== sessionBytes.length ||
+      !timingSafeEqual(submittedBytes, sessionBytes)) {
+    return res.status(403).json({ error: "Your session token is invalid. Refresh and try again." });
+  }
+  next();
+}
+
+function handleAvatarUpload(req, res, next) {
+  avatarUpload.single("photo")(req, res, (error) => {
+    if (!error) {
+      return next();
+    }
+    return res.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({
+      error: error.code === "LIMIT_FILE_SIZE"
+        ? "Photo must be 2 MB or smaller."
+        : "Unable to upload the photo."
+    });
+  });
+}
+
+function validAvatarFilename(filename) {
+  return typeof filename === "string" && /^[a-f0-9]{32}\.(jpg|png|webp)$/.test(filename);
+}
+
+async function addNotification(executor, userId, type, message, link, dedupeKey = null) {
+  await executor.execute(
+    `INSERT INTO notifications (user_id, type, message, link, dedupe_key)
+     VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
+    [userId, type, message, link, dedupeKey]
+  );
+}
+
+function safeNotificationLink(link) {
+  return typeof link === "string" && link.startsWith("/") && !link.startsWith("//")
+    ? link
+    : "/staff/dashboard";
+}
+
+async function notifyAdmins(executor, type, message, link, dedupePrefix = null) {
+  const [admins] = await executor.execute(
+    "SELECT id FROM users WHERE role = 'admin'"
+  );
+  for (const admin of admins) {
+    await addNotification(
+      executor,
+      admin.id,
+      type,
+      message,
+      link,
+      dedupePrefix ? `${dedupePrefix}:${admin.id}` : null
+    );
+  }
+}
+
+async function ensureOverduePmsNotifications() {
+  const [overdueHospitals] = await pool.execute(
+    `SELECT h.id, h.name
+     FROM hospitals h
+     JOIN pms_items p ON p.hospital_id = h.id
+     WHERE p.next_pms < CURRENT_DATE()
+     GROUP BY h.id, h.name`
+  );
+  const [[databaseDate]] = await pool.execute(
+    "SELECT DATE_FORMAT(CURRENT_DATE(), '%Y-%m-%d') AS today"
+  );
+  const today = databaseDate.today;
+  for (const hospital of overdueHospitals) {
+    await notifyAdmins(
+      pool,
+      "pms_overdue",
+      `${hospital.name} has PMS items overdue.`,
+      `/staff/monitoring/${hospital.id}`,
+      `pms-overdue:${hospital.id}:${today}`
+    );
   }
 }
 
@@ -496,23 +604,27 @@ function handlePmsCsvUpload(req, res, next) {
 }
 
 async function getNotifications(user) {
-  const whereClause = user.role === "admin" ? "t.status = 'pending'" : "t.assigned_to = ?";
-  const params = user.role === "admin" ? [] : [user.id];
-  const [[{ count }]] = await pool.execute(
-    `SELECT COUNT(*) AS count FROM tickets t WHERE ${whereClause}`,
-    params
+  await ensureOverduePmsNotifications();
+  const [[counts]] = await pool.execute(
+    `SELECT COUNT(*) AS unread_count
+     FROM notifications WHERE user_id = ? AND is_read = FALSE`,
+    [user.id]
   );
-  const [tickets] = await pool.execute(
-    `SELECT t.ticket_number, t.subject, h.name AS hospital_name
-     FROM tickets t
-     JOIN hospitals h ON h.id = t.hospital_id
-     WHERE ${whereClause}
-     ORDER BY t.updated_at DESC, t.id DESC
-     LIMIT 5`,
-    params
+  const [[latest]] = await pool.execute(
+    "SELECT COALESCE(MAX(id), 0) AS max_id FROM notifications WHERE user_id = ?",
+    [user.id]
   );
-
-  return { count: Number(count), tickets };
+  const [items] = await pool.execute(
+    `SELECT id, type, message, link, is_read, created_at
+     FROM notifications WHERE user_id = ?
+     ORDER BY id DESC LIMIT 30`,
+    [user.id]
+  );
+  return {
+    count: Number(counts.unread_count) || 0,
+    maxId: Number(latest.max_id) || 0,
+    items
+  };
 }
 
 async function renderTicketDetail(req, res, statusCode = 200, errorMessage = null) {
@@ -662,7 +774,7 @@ app.post("/login", async (req, res, next) => {
   }
 });
 
-app.post("/logout", requireLogin, (req, res, next) => {
+app.post("/logout", requireLogin, requireCsrf, (req, res, next) => {
   req.session.destroy((error) => {
     if (error) {
       return next(error);
@@ -670,6 +782,234 @@ app.post("/logout", requireLogin, (req, res, next) => {
     res.clearCookie("hs_helpdesk_session", { httpOnly: true, sameSite: "lax" });
     res.redirect("/");
   });
+});
+
+app.get("/staff/notifications/poll", requireLogin, notificationPollLimiter, async (req, res, next) => {
+  const sinceInput = req.query.since ?? "0";
+  if (typeof sinceInput !== "string" || !/^\d+$/.test(sinceInput) ||
+      !Number.isSafeInteger(Number(sinceInput))) {
+    return res.status(400).json({ error: "Invalid notification cursor." });
+  }
+  try {
+    await ensureOverduePmsNotifications();
+    res.set("Cache-Control", "no-store");
+    const [items] = await pool.execute(
+      `SELECT id, type, message, link, is_read, created_at
+       FROM notifications WHERE user_id = ? AND id > ?
+       ORDER BY id ASC LIMIT 50`,
+      [req.session.user.id, Number(sinceInput)]
+    );
+    const [[counts]] = await pool.execute(
+      "SELECT COUNT(*) AS unread_count FROM notifications WHERE user_id = ? AND is_read = FALSE",
+      [req.session.user.id]
+    );
+    res.json({
+      count: Number(counts.unread_count) || 0,
+      items: items.map((item) => ({
+        ...item,
+        link: `/staff/notifications/${item.id}/open`
+      }))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/staff/notifications/read-all", requireLogin, requireCsrf, async (req, res, next) => {
+  try {
+    await pool.execute(
+      "UPDATE notifications SET is_read = TRUE WHERE user_id = ? AND is_read = FALSE",
+      [req.session.user.id]
+    );
+    res.json({ count: 0 });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/staff/notifications/:id/open", requireLogin, async (req, res, next) => {
+  if (!/^\d+$/.test(req.params.id)) {
+    return res.sendStatus(404);
+  }
+  try {
+    const [items] = await pool.execute(
+      "SELECT link FROM notifications WHERE id = ? AND user_id = ? LIMIT 1",
+      [req.params.id, req.session.user.id]
+    );
+    if (!items.length) {
+      return res.sendStatus(404);
+    }
+    res.redirect(safeNotificationLink(items[0].link));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/staff/notifications/:id/open", requireLogin, requireCsrf, async (req, res, next) => {
+  if (!/^\d+$/.test(req.params.id)) {
+    return res.sendStatus(404);
+  }
+  try {
+    const [items] = await pool.execute(
+      "SELECT link FROM notifications WHERE id = ? AND user_id = ? LIMIT 1",
+      [req.params.id, req.session.user.id]
+    );
+    if (!items.length) {
+      return res.sendStatus(404);
+    }
+    await pool.execute(
+      "UPDATE notifications SET is_read = TRUE WHERE id = ? AND user_id = ?",
+      [req.params.id, req.session.user.id]
+    );
+    res.redirect(303, safeNotificationLink(items[0].link));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/avatars/:filename", async (req, res, next) => {
+  const { filename } = req.params;
+  if (!validAvatarFilename(filename)) {
+    return res.sendStatus(404);
+  }
+  try {
+    const [owners] = await pool.execute(
+      "SELECT id FROM users WHERE avatar_path = ? LIMIT 1",
+      [filename]
+    );
+    if (!owners.length) {
+      return res.sendStatus(404);
+    }
+    res.set("Cache-Control", "public, max-age=3600");
+    res.sendFile(filename, { root: avatarDirectory }, (error) => {
+      if (error && !res.headersSent) {
+        next(error);
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/staff/profile/photo", requireLogin, requireCsrf, handleAvatarUpload, async (req, res, next) => {
+  let newFilename = null;
+  let newAvatarPersisted = false;
+  try {
+    const removePhoto = req.body.removePhoto === "1";
+    if (!removePhoto && !req.file) {
+      return res.status(400).json({ error: "Choose a JPG, PNG, or WebP photo." });
+    }
+
+    let extension = null;
+    if (!removePhoto) {
+      const { buffer, mimetype } = req.file;
+      if (mimetype === "image/jpeg" && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+        extension = "jpg";
+      } else if (mimetype === "image/png" &&
+                 buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+        extension = "png";
+      } else if (mimetype === "image/webp" &&
+                 buffer.toString("ascii", 0, 4) === "RIFF" &&
+                 buffer.toString("ascii", 8, 12) === "WEBP") {
+        extension = "webp";
+      }
+      if (!extension) {
+        return res.status(400).json({ error: "Photo must be a valid JPG, PNG, or WebP image." });
+      }
+    }
+
+    const [users] = await pool.execute(
+      "SELECT avatar_path FROM users WHERE id = ? LIMIT 1",
+      [req.session.user.id]
+    );
+    if (!users[0]) {
+      return res.status(404).json({ error: "Account not found." });
+    }
+    const oldFilename = users[0].avatar_path;
+
+    if (removePhoto) {
+      await pool.execute("UPDATE users SET avatar_path = NULL WHERE id = ?", [req.session.user.id]);
+      req.session.user.avatarPath = null;
+    } else {
+      await fs.mkdir(avatarDirectory, { recursive: true });
+      newFilename = `${randomBytes(16).toString("hex")}.${extension}`;
+      await fs.writeFile(path.join(avatarDirectory, newFilename), req.file.buffer, { flag: "wx" });
+      await pool.execute("UPDATE users SET avatar_path = ? WHERE id = ?", [newFilename, req.session.user.id]);
+      newAvatarPersisted = true;
+      req.session.user.avatarPath = newFilename;
+    }
+
+    if (validAvatarFilename(oldFilename)) {
+      try {
+        await fs.unlink(path.join(avatarDirectory, oldFilename));
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+    return res.json({
+      avatarUrl: req.session.user.avatarPath ? `/avatars/${req.session.user.avatarPath}` : null
+    });
+  } catch (error) {
+    if (newFilename && !newAvatarPersisted) {
+      try {
+        await fs.unlink(path.join(avatarDirectory, newFilename));
+      } catch (cleanupError) {
+        if (cleanupError.code !== "ENOENT") {
+          return next(cleanupError);
+        }
+      }
+    }
+    next(error);
+  }
+});
+
+app.post("/staff/profile/password", requireLogin, requireCsrf, async (req, res, next) => {
+  const currentPassword = String(req.body.currentPassword || "");
+  const newPassword = String(req.body.newPassword || "");
+  const confirmPassword = String(req.body.confirmPassword || "");
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: "New password must be at least 8 characters." });
+  }
+  if (newPassword !== confirmPassword) {
+    return res.status(400).json({ error: "New password and confirmation do not match." });
+  }
+
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [users] = await connection.execute(
+      "SELECT username, password_hash FROM users WHERE id = ? LIMIT 1 FOR UPDATE",
+      [req.session.user.id]
+    );
+    const user = users[0];
+    if (!user || !(await bcrypt.compare(currentPassword, user.password_hash))) {
+      await connection.rollback();
+      return res.status(400).json({ error: "Current password is incorrect." });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await connection.execute("UPDATE users SET password_hash = ? WHERE id = ?", [passwordHash, user.id]);
+    await connection.execute(
+      `INSERT INTO user_account_history
+         (actor_user_id, actor_name, target_user_id, target_username, action, details)
+       VALUES (?, ?, ?, ?, 'Password changed', 'User changed their own password.')`,
+      [user.id, req.session.user.displayName, user.id, user.username]
+    );
+    await connection.commit();
+    res.json({ message: "Password changed." });
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    next(error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
 });
 
 async function renderAccountsPage(req, res, options = {}) {
@@ -2044,7 +2384,7 @@ app.post("/staff/tickets/:ticketNumber/approve", requireLogin, async (req, res, 
     connection = await pool.getConnection();
     await connection.beginTransaction();
     const [tickets] = await connection.execute(
-      "SELECT id, status FROM tickets WHERE ticket_number = ? FOR UPDATE",
+      "SELECT id, status, assigned_to, ticket_number, subject FROM tickets WHERE ticket_number = ? FOR UPDATE",
       [req.params.ticketNumber]
     );
     const ticket = tickets[0];
@@ -2071,6 +2411,22 @@ app.post("/staff/tickets/:ticketNumber/approve", requireLogin, async (req, res, 
         `Approved by ${req.session.user.displayName}`
       ]
     );
+    if (ticket.assigned_to) {
+      await addNotification(
+        connection,
+        ticket.assigned_to,
+        "ticket_approved",
+        `Ticket-${ticket.ticket_number} was approved.`,
+        `/staff/tickets/${ticket.ticket_number}`
+      );
+    } else {
+      await notifyAdmins(
+        connection,
+        "ticket_approved",
+        `Ticket-${ticket.ticket_number} was approved.`,
+        `/staff/tickets/${ticket.ticket_number}`
+      );
+    }
     await connection.commit();
     res.redirect(`/staff/tickets/${req.params.ticketNumber}`);
   } catch (error) {
@@ -2116,7 +2472,7 @@ app.post("/staff/tickets/:ticketNumber/update", requireLogin, async (req, res, n
     connection = await pool.getConnection();
     await connection.beginTransaction();
     const [tickets] = await connection.execute(
-      `SELECT id, status, priority, assigned_to
+      `SELECT id, ticket_number, subject, status, priority, assigned_to
        FROM tickets
        WHERE ticket_number = ?
        FOR UPDATE`,
@@ -2222,6 +2578,49 @@ app.post("/staff/tickets/:ticketNumber/update", requireLogin, async (req, res, n
         ]
       );
     }
+    const ticketLink = `/staff/tickets/${ticket.ticket_number}`;
+    if (assignmentChanged && technician) {
+      await addNotification(
+        connection,
+        technician.id,
+        "ticket_assigned",
+        `Ticket-${ticket.ticket_number} was assigned to you: ${ticket.subject}`,
+        ticketLink
+      );
+    }
+    const statusRecipientId = assignedTo || ticket.assigned_to;
+    if (ticket.status !== effectiveStatus && statusRecipientId) {
+      await addNotification(
+        connection,
+        statusRecipientId,
+        "ticket_status",
+        `Ticket-${ticket.ticket_number} status changed to ${ticketStatuses[effectiveStatus]}.`,
+        ticketLink
+      );
+      await notifyAdmins(
+        connection,
+        "ticket_status",
+        `Ticket-${ticket.ticket_number} status changed to ${ticketStatuses[effectiveStatus]}.`,
+        ticketLink
+      );
+    }
+    if (publicMessage) {
+      if (statusRecipientId) {
+        await addNotification(
+          connection,
+          statusRecipientId,
+          "ticket_message",
+          `A public message was added to Ticket-${ticket.ticket_number}.`,
+          ticketLink
+        );
+      }
+      await notifyAdmins(
+        connection,
+        "ticket_message",
+        `A public message was added to Ticket-${ticket.ticket_number}.`,
+        ticketLink
+      );
+    }
     await connection.commit();
     res.redirect(`/staff/tickets/${req.params.ticketNumber}`);
   } catch (error) {
@@ -2306,6 +2705,12 @@ app.post("/tickets/new", async (req, res, next) => {
              (ticket_id, actor_user_id, actor_name, action, details, is_public)
              VALUES (?, NULL, 'employee (Self-service)', 'Ticket created by employee (Self-service)', 'Ticket submitted through the public self-service form.', TRUE)`,
             [ticketResult.insertId]
+          );
+          await notifyAdmins(
+            connection,
+            "ticket_new",
+            `A new ticket was submitted: Ticket-${ticketNumber}.`,
+            `/staff/tickets/${ticketNumber}`
           );
           await connection.commit();
           break;
