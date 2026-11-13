@@ -335,6 +335,9 @@ function formatAverageDuration(milliseconds) {
   const minutes = milliseconds > 0
     ? Math.max(1, Math.round(milliseconds / 60000))
     : 0;
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
   if (minutes >= 1440) {
     const days = Math.round(minutes / 1440);
     return `${days} day${days === 1 ? "" : "s"}`;
@@ -1752,7 +1755,9 @@ app.post("/staff/tickets/:ticketNumber/update", requireLogin, async (req, res, n
     if (ticket.status !== effectiveStatus) {
       changes.push({
         action: "Status changed",
-        details: `Status changed from ${ticketStatuses[ticket.status]} to ${ticketStatuses[effectiveStatus]}`,
+        details: effectiveStatus === "resolved"
+          ? "Status changed to Resolved"
+          : `Status changed from ${ticketStatuses[ticket.status]} to ${ticketStatuses[effectiveStatus]}`,
         isPublic: true
       });
     }

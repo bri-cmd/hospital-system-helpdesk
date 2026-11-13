@@ -264,15 +264,42 @@ async function seed() {
           );
         }
         if (sample.status !== "pending") {
-          const [statusHistory] = await connection.execute(
-            "SELECT id FROM ticket_history WHERE ticket_id = ? AND action = 'Status changed' LIMIT 1",
-            [ticketId]
-          );
+          const [statusHistory] = sample.status === "resolved"
+            ? await connection.execute(
+              `SELECT id FROM ticket_history
+               WHERE ticket_id = ? AND action = 'Status changed'
+                 AND details LIKE '% to Resolved%'
+               ORDER BY created_at DESC, id DESC LIMIT 1`,
+              [ticketId]
+            )
+            : await connection.execute(
+              "SELECT id FROM ticket_history WHERE ticket_id = ? AND action = 'Status changed' LIMIT 1",
+              [ticketId]
+            );
           if (statusHistory.length === 0) {
+            if (sample.status === "resolved") {
+              await connection.execute(
+                `INSERT INTO ticket_history
+                   (ticket_id, actor_name, action, details, is_public, created_at)
+                 SELECT id, 'Hospital Systems', 'Status changed', 'Status changed to Resolved', TRUE,
+                        DATE_ADD(created_at, INTERVAL 4 HOUR)
+                 FROM tickets WHERE id = ?`,
+                [ticketId]
+              );
+            } else {
+              await connection.execute(
+                `INSERT INTO ticket_history (ticket_id, actor_name, action, details, is_public)
+                 VALUES (?, 'Hospital Systems', 'Status changed', ?, TRUE)`,
+                [ticketId, `Status changed to ${ticketStatusLabels[sample.status]}.`]
+              );
+            }
+          } else if (sample.status === "resolved") {
             await connection.execute(
-              `INSERT INTO ticket_history (ticket_id, actor_name, action, details, is_public)
-               VALUES (?, 'Hospital Systems', 'Status changed', ?, TRUE)`,
-              [ticketId, `Status changed to ${ticketStatusLabels[sample.status]}.`]
+              `UPDATE ticket_history th
+               JOIN tickets t ON t.id = th.ticket_id
+               SET th.created_at = DATE_ADD(t.created_at, INTERVAL 4 HOUR)
+               WHERE th.id = ?`,
+              [statusHistory[0].id]
             );
           }
         }
