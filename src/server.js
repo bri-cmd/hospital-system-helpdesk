@@ -17,6 +17,7 @@ if (!process.env.SESSION_SECRET) {
 }
 
 const app = express();
+app.set("trust proxy", "loopback");
 const pool = createPool();
 const port = Number(process.env.PORT || 3001);
 const avatarDirectory = path.join(__dirname, "..", "uploads", "avatars");
@@ -47,7 +48,16 @@ const avatarUpload = multer({
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 app.disable("x-powered-by");
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        upgradeInsecureRequests: null
+      }
+    },
+    strictTransportSecurity: false
+  })
+);
 app.use((req, res, next) => {
   if (req.method === "POST" && req.path === "/tickets/new") {
     return submissionLimiter(req, res, next);
@@ -2828,8 +2838,9 @@ app.use((error, req, res, next) => {
   res.status(500).render("error", { title: "Something went wrong" });
 });
 
-const server = app.listen(port, () => {
-  console.log(`Hospital Systems Helpdesk listening on port ${port}.`);
+const host = process.env.HOST || "127.0.0.1";
+const server = app.listen(port, host, () => {
+  console.log(`Hospital Systems Helpdesk listening on ${host}:${port}.`);
 });
 
 function closeServer() {
